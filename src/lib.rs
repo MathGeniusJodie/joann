@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, sync::atomic};
 use num::traits::Float;
 
-type SWID = u128;
+type Swid = u128;
 type NodeID = usize;
 const MAX_LAYER: usize = 16;
 
@@ -13,7 +13,7 @@ struct Neighbor<F:Copy+Default+Ord+PartialOrd+Float+From<f64>>{
 
 struct BaseNode <const DIM:usize,F:Copy+Default+Ord+PartialOrd+Float+From<f64>,const M:usize>{
     vector:[F;DIM],
-    swid: SWID,
+    swid: Swid,
 }
 struct Node <const DIM:usize,F:Copy+Default+Ord+PartialOrd+Float+From<f64>,const M:usize>{
     neighbors: [Neighbor<F>;M],
@@ -69,17 +69,14 @@ fn rand_f() -> f64 {
 
 impl <const DIM: usize,F:Copy+Default+Ord+PartialOrd+Float+From<f64>,const M:usize> HNSW<DIM,F,M> {
     pub fn new(ef_construction: usize) -> HNSW<DIM,F,M> {
-        let mut layers:[Vec<Node<DIM,F,M>>;MAX_LAYER] = Default::default();
-        for i in 0..MAX_LAYER {
-            layers[i] = Vec::new();
-        }
+        let layers:[Vec<Node<DIM,F,M>>;MAX_LAYER] = Default::default();
         HNSW {
             layers,
             base_layer: Vec::new(),
             ef_construction,
         }
     }
-    pub fn insert(&mut self, q: [F;DIM], swid: SWID) {
+    pub fn insert(&mut self, q: [F;DIM], swid: Swid) {
         let l = ((-(rand_f()).ln()*(1.0f64/(16.0f64).ln())).floor() as usize).min(MAX_LAYER-1);
         for lc in (0..l).rev() {
             let mut neighbors:[Neighbor<F>;M] = [Neighbor{id:0,distance:F::default()};M];
@@ -109,7 +106,7 @@ impl <const DIM: usize,F:Copy+Default+Ord+PartialOrd+Float+From<f64>,const M:usi
             swid,
         });
     }
-    pub fn remove(&mut self, swid: SWID) {
+    pub fn remove(&mut self, swid: Swid) {
         let mut new_hnsw = HNSW::new(self.ef_construction);
         for node in &self.base_layer {
             if node.swid != swid {
@@ -164,10 +161,10 @@ impl <const DIM: usize,F:Copy+Default+Ord+PartialOrd+Float+From<f64>,const M:usi
         if layer == 0 {
             &self.base_layer[id]
         } else {
-            &self.get_base(layer-1,self.layers[layer][id].lower_id)
+            self.get_base(layer-1,self.layers[layer][id].lower_id)
         }
     }
-    pub fn knn(&self, q: [F;DIM], k: usize) -> Vec<SWID> {
+    pub fn knn(&self, q: [F;DIM], k: usize) -> Vec<Swid> {
         let ef_search = self.ef_construction.max(k);
         let mut w = BTreeSet::new();
         let mut top_layer = MAX_LAYER-1;
