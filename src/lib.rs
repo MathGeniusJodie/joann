@@ -1,4 +1,4 @@
-use num::traits::Float;
+use num_traits::Float;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::BinaryHeap;
 use std::fmt::Debug;
@@ -8,29 +8,47 @@ use std::{collections::BTreeSet, sync::atomic};
 type Swid = u128;
 type NodeID = usize;
 const MAX_LAYER: usize = 16;
-pub trait FX: Copy + Default + Ord + PartialOrd + Float + From<f64> + Debug {}
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
-struct Neighbor<F: FX> {
+#[derive(Copy, Clone, Debug, PartialOrd, Default)]
+struct Neighbor<F: Float + Debug + From<f64> + Default> {
     id: NodeID,
     distance: F,
 }
-struct BaseNode<const DIM: usize, F: FX, const M: usize> {
+impl<F: Float + Debug + From<f64> + Default> PartialEq for Neighbor<F> {
+    fn eq(&self, other: &Self) -> bool {
+        self.distance == other.distance
+    }
+}
+impl<F: Float + Debug + From<f64> + Default> Eq for Neighbor<F> {}
+impl<F: Float + Debug + From<f64> + Default> Ord for Neighbor<F> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.distance.partial_cmp(&other.distance) {
+            Some(ord) => ord,
+            None => std::cmp::Ordering::Equal,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct BaseNode<const DIM: usize, F: Float + Debug + From<f64> + Default, const M: usize> {
     vector: [F; DIM],
     swid: Swid,
 }
-pub struct HNSW<const DIM: usize, F: FX, const M: usize> {
+
+#[derive(Debug)]
+pub struct HNSW<const DIM: usize, F: Float + Debug + From<f64> + Default, const M: usize> {
     layers: [Vec<Node<DIM, F, M>>; MAX_LAYER],
     base_layer: Vec<BaseNode<DIM, F, M>>,
     ef_construction: usize,
 }
 
-struct Node<const DIM: usize, F: FX, const M: usize> {
+#[derive(Debug)]
+struct Node<const DIM: usize, F: Float + Debug + From<f64> + Default, const M: usize> {
     neighbors: [Neighbor<F>; M],
     n_neighbors: u8,
     lower_id: NodeID,
 }
-impl<const DIM: usize, F: FX, const M: usize> Node<DIM, F, M> {
+impl<const DIM: usize, F: Float + Debug + From<f64> + Default, const M: usize> Node<DIM, F, M> {
     fn insert(&mut self, neighbor: Neighbor<F>) {
         let mut heap = BinaryHeap::from(self.neighbors[..self.n_neighbors as usize].to_vec());
         heap.push(neighbor);
@@ -41,7 +59,10 @@ impl<const DIM: usize, F: FX, const M: usize> Node<DIM, F, M> {
     }
 }
 
-fn get_distance<const DIM: usize, F: FX>(a: &[F; DIM], b: &[F; DIM]) -> F {
+fn get_distance<const DIM: usize, F: Float + Debug + From<f64> + Default>(
+    a: &[F; DIM],
+    b: &[F; DIM],
+) -> F {
     let mut sum: F = 0.0.into();
     for i in 0..DIM {
         sum = sum + (a[i] - b[i]) * (a[i] - b[i]);
@@ -57,7 +78,7 @@ fn rand_f() -> f64 {
     s.finish() as f64 / u64::MAX as f64
 }
 
-impl<const DIM: usize, F: FX, const M: usize> HNSW<DIM, F, M> {
+impl<const DIM: usize, F: Float + Debug + From<f64> + Default, const M: usize> HNSW<DIM, F, M> {
     pub fn new(ef_construction: usize) -> HNSW<DIM, F, M> {
         let layers: [Vec<Node<DIM, F, M>>; MAX_LAYER] = Default::default();
         HNSW {
@@ -72,12 +93,14 @@ impl<const DIM: usize, F: FX, const M: usize> HNSW<DIM, F, M> {
 
         let mut ep = 0;
         for lc in (l..MAX_LAYER).rev() {
-            let id = self.search_layer(q, ep, 1, lc).first().unwrap().id;
-            ep = self.layers[lc][id].lower_id;
+            ep = match self.search_layer(q, ep, 1, lc).first() {
+                Some(n) => self.layers[lc][n.id].lower_id,
+                None => 0
+            };
         }
 
-        for lc in (0..l).rev() {
-            let mut n = self.search_layer(q, 0, self.ef_construction, lc);
+        for lc in (0..=l).rev() {
+            let mut n = self.search_layer(q, ep, self.ef_construction, lc);
             let nl = n.len();
             let qid = self.layers[lc].len();
             for neighbor in &n {
@@ -106,6 +129,9 @@ impl<const DIM: usize, F: FX, const M: usize> HNSW<DIM, F, M> {
         self.base_layer = new_hnsw.base_layer;
     }
     fn search_layer(&self, q: [F; DIM], ep: usize, ef: usize, layer: usize) -> Vec<Neighbor<F>> {
+        if self.layers[layer].is_empty() {
+            return Vec::new();
+        }
         let ep_dist = get_distance(&self.get_base(layer, ep).vector, &q);
         let mut visited = BTreeSet::new();
         let mut candidates = BTreeSet::new();
@@ -158,8 +184,10 @@ impl<const DIM: usize, F: FX, const M: usize> HNSW<DIM, F, M> {
         let ef_search = self.ef_construction.max(k);
         let mut ep = 0;
         for lc in (1..MAX_LAYER).rev() {
-            let id = self.search_layer(q, ep, 1, lc).first().unwrap().id;
-            ep = self.layers[lc][id].lower_id;
+            ep = match self.search_layer(q, ep, 1, lc).first() {
+                Some(n) => self.layers[lc][n.id].lower_id,
+                None => 0
+            };
         }
         self.search_layer(q, ep, ef_search, 0)
             .iter()
