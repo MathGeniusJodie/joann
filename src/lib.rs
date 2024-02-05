@@ -1,15 +1,13 @@
 use num_traits::Float;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::BinaryHeap;
-use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
-use std::{collections::BTreeSet, sync::atomic};
+use std::{collections::BTreeSet, fmt::Debug, sync::atomic};
 
 type Swid = u128;
 type NodeID = usize;
 const MAX_LAYER: usize = 16;
 
-#[derive(Copy, Clone, Debug, PartialOrd, Default)]
+#[derive(Copy, Clone, Debug, Default)]
 struct Neighbor<F: Float + Debug + From<f64> + Default> {
     id: NodeID,
     distance: F,
@@ -20,6 +18,11 @@ impl<F: Float + Debug + From<f64> + Default> PartialEq for Neighbor<F> {
     }
 }
 impl<F: Float + Debug + From<f64> + Default> Eq for Neighbor<F> {}
+impl<F: Float + Debug + From<f64> + Default> PartialOrd for Neighbor<F> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
 impl<F: Float + Debug + From<f64> + Default> Ord for Neighbor<F> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         match self.distance.partial_cmp(&other.distance) {
@@ -50,12 +53,11 @@ struct Node<const DIM: usize, F: Float + Debug + From<f64> + Default, const M: u
 }
 impl<const DIM: usize, F: Float + Debug + From<f64> + Default, const M: usize> Node<DIM, F, M> {
     fn insert(&mut self, neighbor: Neighbor<F>) {
-        let mut heap = BinaryHeap::from(self.neighbors[..self.n_neighbors as usize].to_vec());
-        heap.push(neighbor);
-        let mut vec = heap.into_sorted_vec();
-        vec.resize(M, Neighbor::default());
-        self.neighbors = vec.try_into().unwrap();
-        self.n_neighbors = (self.n_neighbors + 1).min(M as u8);
+        if let Err(i) = self.neighbors[..self.n_neighbors as usize].binary_search(&neighbor) {
+            self.n_neighbors = (self.n_neighbors + 1).min(M as u8);
+            self.neighbors[i..self.n_neighbors as usize].rotate_right(1);
+            self.neighbors[i] = neighbor;
+        }
     }
 }
 
@@ -94,7 +96,7 @@ impl<const DIM: usize, F: Float + Debug + From<f64> + Default, const M: usize> H
         for lc in (l..MAX_LAYER).rev() {
             ep = match self.search_layer(q, ep, 1, lc).first() {
                 Some(n) => self.layers[lc][n.id].lower_id,
-                None => 0
+                None => 0,
             };
         }
 
@@ -185,7 +187,7 @@ impl<const DIM: usize, F: Float + Debug + From<f64> + Default, const M: usize> H
         for lc in (1..MAX_LAYER).rev() {
             ep = match self.search_layer(q, ep, 1, lc).first() {
                 Some(n) => self.layers[lc][n.id].lower_id,
-                None => 0
+                None => 0,
             };
         }
         self.search_layer(q, ep, ef_search, 0)
