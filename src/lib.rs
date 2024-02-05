@@ -70,9 +70,9 @@ fn get_distance<const DIM: usize, F: Float + Debug + From<f64> + Default>(
     sum.sqrt()
 }
 
-static mut RNG: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
+static RNG: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
 fn rand_f() -> f64 {
-    let rng = unsafe { RNG.fetch_add(1, atomic::Ordering::Relaxed) };
+    let rng = RNG.fetch_add(1, atomic::Ordering::Relaxed);
     let mut s = DefaultHasher::new();
     rng.hash(&mut s);
     s.finish() as f64 / u64::MAX as f64
@@ -90,7 +90,6 @@ impl<const DIM: usize, F: Float + Debug + From<f64> + Default, const M: usize> H
     pub fn insert(&mut self, q: [F; DIM], swid: Swid) {
         let l =
             ((-(rand_f()).ln() * (1.0f64 / (16.0f64).ln())).floor() as usize).min(MAX_LAYER - 1);
-
         let mut ep = 0;
         for lc in (l..MAX_LAYER).rev() {
             ep = match self.search_layer(q, ep, 1, lc).first() {
@@ -112,7 +111,7 @@ impl<const DIM: usize, F: Float + Debug + From<f64> + Default, const M: usize> H
             n.resize(M, Neighbor::default());
             self.layers[lc].push(Node {
                 neighbors: n.try_into().unwrap(),
-                n_neighbors: nl as u8,
+                n_neighbors: (nl as u8).min(M as u8),
                 lower_id: if lc == 0 { self.base_layer.len() } else { qid }, // todo: check if this is correct (off by one?)
             });
         }
