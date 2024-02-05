@@ -52,7 +52,7 @@ struct Node<const DIM: usize, F: Float + Debug + From<f64> + Default, const M: u
     lower_id: NodeID,
 }
 impl<const DIM: usize, F: Float + Debug + From<f64> + Default, const M: usize> Node<DIM, F, M> {
-    fn insert(&mut self, neighbor: Neighbor<F>) {
+    fn insert_neighbor(&mut self, neighbor: Neighbor<F>) {
         if let Err(i) = self.neighbors[..self.n_neighbors as usize].binary_search(&neighbor) {
             self.n_neighbors = (self.n_neighbors + 1).min(M as u8);
             self.neighbors[i..self.n_neighbors as usize].rotate_right(1);
@@ -105,7 +105,7 @@ impl<const DIM: usize, F: Float + Debug + From<f64> + Default, const M: usize> H
             let nl = n.len();
             let qid = self.layers[lc].len();
             for neighbor in &n {
-                self.layers[lc][neighbor.id].insert(Neighbor {
+                self.layers[lc][neighbor.id].insert_neighbor(Neighbor {
                     id: qid,
                     distance: neighbor.distance,
                 });
