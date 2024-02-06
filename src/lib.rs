@@ -1,6 +1,8 @@
 use num_traits::Float;
 use std::{collections::BTreeSet, fmt::Debug};
 
+mod forever_vec;
+
 type Swid = u128;
 type NodeID = usize;
 const MAX_LAYER: usize = 16;
@@ -46,14 +48,14 @@ pub struct HNSW<const DIM: usize, F: Float + Debug + Default, const M: usize> {
 #[derive(Debug)]
 struct Node<const DIM: usize, F: Float + Debug + Default, const M: usize> {
     neighbors: [Neighbor<F>; M],
-    n_neighbors: u8,
+    n_neighbors: usize,
     lower_id: NodeID,
 }
 impl<const DIM: usize, F: Float + Debug + Default, const M: usize> Node<DIM, F, M> {
     fn insert_neighbor(&mut self, neighbor: Neighbor<F>) {
         if let Err(i) = self.neighbors[..self.n_neighbors as usize].binary_search(&neighbor) {
             if i < M {
-                self.n_neighbors = (self.n_neighbors + 1).min(M as u8);
+                self.n_neighbors = (self.n_neighbors + 1).min(M);
                 self.neighbors[i..self.n_neighbors as usize].rotate_right(1);
                 self.neighbors[i] = neighbor;
             }
@@ -151,7 +153,7 @@ impl<const DIM: usize, F: Float + Debug + Default, const M: usize> HNSW<DIM, F, 
             n.resize(M, Neighbor::default());
             self.layers[lc].push(Node {
                 neighbors: n.try_into().unwrap(),
-                n_neighbors: (nl as u8).min(M as u8),
+                n_neighbors: (nl).min(M),
                 lower_id: if lc == 0 { self.base_layer.len() } else { qid },
             });
         }
