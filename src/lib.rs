@@ -50,10 +50,12 @@ struct Node<const DIM: usize, F: Float + Debug  + Default, const M: usize> {
 }
 impl<const DIM: usize, F: Float + Debug  + Default, const M: usize> Node<DIM, F, M> {
     fn insert_neighbor(&mut self, neighbor: Neighbor<F>) {
-        if let Err(i) = self.neighbors[..self.n_neighbors as usize].binary_search(&neighbor) {
-            self.n_neighbors = (self.n_neighbors + 1).min(M as u8);
-            self.neighbors[i..self.n_neighbors as usize].rotate_right(1);
-            self.neighbors[i] = neighbor;
+        if let Err(mut i) = self.neighbors[..self.n_neighbors as usize].binary_search(&neighbor) {
+            if i < M {
+                self.n_neighbors = (self.n_neighbors + 1).min(M as u8);
+                self.neighbors[i..self.n_neighbors as usize].rotate_right(1);
+                self.neighbors[i] = neighbor;
+            }
         }
     }
 }
@@ -197,6 +199,7 @@ impl<const DIM: usize, F: Float + Debug  + Default, const M: usize> HNSW<DIM, F,
 
 #[cfg(test)]
 mod tests {
+    use microbench::bench;
     use super::*;
 
     #[test]
@@ -213,5 +216,17 @@ mod tests {
         hnsw.insert([8.0, 8.0], 8);
         hnsw.insert([9.0, 9.0], 9);
         assert_eq!(hnsw.knn([0.0, 0.0], 3), vec![(0, 0.0), (1, std::f64::consts::SQRT_2), (2, 2.0 * std::f64::consts::SQRT_2)]);
+    }
+
+    #[test]
+    fn test_insert_1000000() {
+        use microbench::*;
+        let mut hnsw = HNSW::<2, f64, 16>::new(16);
+        let bench_options = Options::default();
+        microbench::bench(&bench_options, "test_insert_1000000", || {
+            for i in 0..1000000 {
+                hnsw.insert([i as f64, i as f64], i);
+            }
+        });
     }
 }
