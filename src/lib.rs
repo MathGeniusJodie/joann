@@ -32,26 +32,23 @@ impl<F: Float + Debug + Default> Ord for Neighbor<F> {
 }
 
 #[derive(Debug)]
-struct BaseNode<const DIM: usize, F: Float + Debug + Default, const M: usize> {
-    vector: [F; DIM],
-    swid: Swid,
-}
-
-#[derive(Debug)]
-pub struct HNSW<const DIM: usize, F: Float + Debug + Default, const M: usize> {
-    layers: [Vec<Node<DIM, F, M>>; MAX_LAYER],
-    base_layer: Vec<BaseNode<DIM, F, M>>,
+pub struct HNSW<F: Float + Debug + Default, const M: usize> {
+    layers: [Vec<Node<F, M>>; MAX_LAYER],
+    dimensions: usize,
+    //base_layer: Vec<BaseNode<DIM, F>>,
+    swid_layer: Vec<Swid>,
+    vector_layer: Vec<F>,
     ef_construction: usize,
     space: Distance,
 }
 
 #[derive(Debug)]
-struct Node<const DIM: usize, F: Float + Debug + Default, const M: usize> {
+struct Node<F: Float + Debug + Default, const M: usize> {
     neighbors: [Neighbor<F>; M],
     n_neighbors: usize,
     lower_id: NodeID,
 }
-impl<const DIM: usize, F: Float + Debug + Default, const M: usize> Node<DIM, F, M> {
+impl<F: Float + Debug + Default, const M: usize> Node<F, M> {
     fn insert_neighbor(&mut self, neighbor: Neighbor<F>) {
         if let Err(i) = self.neighbors[..self.n_neighbors as usize].binary_search(&neighbor) {
             if i < M {
@@ -71,15 +68,15 @@ pub enum Distance {
     IP,
 }
 
-fn get_distance<const DIM: usize, F: Float + Debug + Default>(
-    a: &[F; DIM],
-    b: &[F; DIM],
+fn get_distance<F: Float + Debug + Default>(
+    a: &[F],
+    b: &[F],
     space: Distance,
 ) -> F {
     match space {
         Distance::Euclidean => {
             let mut sum: F = F::zero();
-            for i in 0..DIM {
+            for i in 0..a.len() {
                 let diff = a[i] - b[i];
                 sum = diff.mul_add(diff, sum);
             }
@@ -89,7 +86,7 @@ fn get_distance<const DIM: usize, F: Float + Debug + Default>(
             let mut dot: F = F::zero();
             let mut norm_a: F = F::zero();
             let mut norm_b: F = F::zero();
-            for i in 0..DIM {
+            for i in 0..a.len() {
                 dot = a[i].mul_add(b[i], dot);
                 norm_a = a[i].mul_add(a[i], norm_a);
                 norm_b = b[i].mul_add(b[i], norm_b);
@@ -98,7 +95,7 @@ fn get_distance<const DIM: usize, F: Float + Debug + Default>(
         }
         Distance::L2 => {
             let mut sum: F = F::zero();
-            for i in 0..DIM {
+            for i in 0..a.len() {
                 let diff = a[i] - b[i];
                 sum = diff.mul_add(diff, sum);
             }
@@ -106,7 +103,7 @@ fn get_distance<const DIM: usize, F: Float + Debug + Default>(
         }
         Distance::IP => {
             let mut dot: F = F::zero();
-            for i in 0..DIM {
+            for i in 0..a.len() {
                 dot = a[i].mul_add(b[i], dot);
             }
             dot
@@ -120,17 +117,20 @@ fn rand_f() -> f64 {
     rand::random::<f64>()
 }
 
-impl<const DIM: usize, F: Float + Debug + Default, const M: usize> HNSW<DIM, F, M> {
-    pub fn new(ef_construction: usize, space: Distance) -> HNSW<DIM, F, M> {
-        let layers: [Vec<Node<DIM, F, M>>; MAX_LAYER] = Default::default();
+impl<F: Float + Debug + Default, const M: usize> HNSW<F, M> {
+    pub fn new(ef_construction: usize, space: Distance, dimensions:usize) -> HNSW<F, M> {
+        let layers: [Vec<Node<F, M>>; MAX_LAYER] = Default::default();
         HNSW {
             layers,
-            base_layer: Vec::new(),
+            dimensions,
+            //base_layer: Vec::new(),
+            swid_layer: Vec::new(),
+            vector_layer: Vec::new(),
             ef_construction,
             space,
         }
     }
-    pub fn insert(&mut self, q: [F; DIM], swid: Swid) {
+    pub fn insert(&mut self, q: &[F], swid: Swid) {
         let l = ((-rand_f().ln() * (1.0f64 / 16.0f64.ln())) as usize).min(MAX_LAYER - 1);
         let mut ep = 0;
         for lc in (l..MAX_LAYER).rev() {
@@ -154,11 +154,13 @@ impl<const DIM: usize, F: Float + Debug + Default, const M: usize> HNSW<DIM, F, 
             self.layers[lc].push(Node {
                 neighbors: n.try_into().unwrap(),
                 n_neighbors: (nl).min(M),
-                lower_id: if lc == 0 { self.base_layer.len() } else { qid },
+                lower_id: if lc == 0 { self.swid_layer.len() } else { qid },
             });
         }
-        self.base_layer.push(BaseNode { vector: q, swid });
+        self.swid_layer.push(swid);
+        self.vector_layer.extend_from_slice(&q);
     }
+    /*
     pub fn remove(&mut self, swid: Swid) {
         let mut new_hnsw = HNSW::new(self.ef_construction, self.space);
         for node in &self.base_layer {
@@ -168,12 +170,12 @@ impl<const DIM: usize, F: Float + Debug + Default, const M: usize> HNSW<DIM, F, 
         }
         self.layers = new_hnsw.layers;
         self.base_layer = new_hnsw.base_layer;
-    }
-    fn search_layer(&self, q: [F; DIM], ep: usize, ef: usize, layer: usize) -> Vec<Neighbor<F>> {
+    }*/
+    fn search_layer(&self, q: &[F], ep: usize, ef: usize, layer: usize) -> Vec<Neighbor<F>> {
         if self.layers[layer].is_empty() {
             return Vec::new();
         }
-        let ep_dist = get_distance(&self.get_base(layer, ep).vector, &q, self.space);
+        let ep_dist = get_distance(self.get_vector(layer, ep), &q, self.space);
         let mut visited = BTreeSet::new();
         let mut candidates = BTreeSet::new();
         let mut result = BTreeSet::new();
@@ -192,13 +194,14 @@ impl<const DIM: usize, F: Float + Debug + Default, const M: usize> HNSW<DIM, F, 
             if c.distance > f.distance {
                 break;
             }
-            for e in self.layers[layer][c.id].neighbors.iter() {
+            for i in 0..self.layers[layer][c.id].n_neighbors {
+                let e = self.layers[layer][c.id].neighbors[i];
                 if visited.contains(&e.id) {
                     continue;
                 }
                 visited.insert(e.id);
                 let f = result.last().unwrap();
-                let d_e = get_distance(&self.get_base(layer, e.id).vector, &q, self.space);
+                let d_e = get_distance(self.get_vector(layer, e.id), &q, self.space);
                 if d_e < f.distance || result.len() < ef {
                     candidates.insert(Neighbor {
                         id: e.id,
@@ -213,15 +216,23 @@ impl<const DIM: usize, F: Float + Debug + Default, const M: usize> HNSW<DIM, F, 
         }
         result.into_iter().collect()
     }
-    fn get_base(&self, layer: usize, id: NodeID) -> &BaseNode<DIM, F, M> {
+    fn get_swid(&self, layer: usize, id: NodeID) -> Swid {
         let lower = self.layers[layer][id].lower_id;
         if layer == 0 {
-            &self.base_layer[lower]
+            self.swid_layer[lower]
         } else {
-            self.get_base(layer - 1, lower)
+            self.get_swid(layer - 1, lower)
         }
     }
-    pub fn knn(&self, q: [F; DIM], k: usize) -> Vec<(Swid, F)> {
+    fn get_vector(&self, layer: usize, id: NodeID) -> &[F] {
+        let lower = self.layers[layer][id].lower_id;
+        if layer == 0 {
+            &self.vector_layer[lower*self.dimensions..(lower+1)*self.dimensions]
+        } else {
+            self.get_vector(layer - 1, lower)
+        }
+    }
+    pub fn knn(&self, q: &[F], k: usize) -> Vec<(Swid, F)> {
         let ef_search = self.ef_construction.max(k);
         let mut ep = 0;
         for lc in (1..MAX_LAYER).rev() {
@@ -233,7 +244,7 @@ impl<const DIM: usize, F: Float + Debug + Default, const M: usize> HNSW<DIM, F, 
         self.search_layer(q, ep, ef_search, 0)
             .iter()
             .take(k)
-            .map(|n| (self.get_base(0, n.id).swid, n.distance))
+            .map(|n| (self.get_swid(0, n.id), n.distance))
             .collect()
     }
 }
@@ -244,19 +255,19 @@ mod tests {
 
     #[test]
     fn test_hnsw() {
-        let mut hnsw = HNSW::<2, f64, 16>::new(16, Distance::Euclidean);
-        hnsw.insert([0.0, 0.0], 0);
-        hnsw.insert([1.0, 1.0], 1);
-        hnsw.insert([2.0, 2.0], 2);
-        hnsw.insert([3.0, 3.0], 3);
-        hnsw.insert([4.0, 4.0], 4);
-        hnsw.insert([5.0, 5.0], 5);
-        hnsw.insert([6.0, 6.0], 6);
-        hnsw.insert([7.0, 7.0], 7);
-        hnsw.insert([8.0, 8.0], 8);
-        hnsw.insert([9.0, 9.0], 9);
+        let mut hnsw = HNSW::<f64, 16>::new(16, Distance::Euclidean, 2);
+        hnsw.insert(&[0.0, 0.0], 0);
+        hnsw.insert(&[1.0, 1.0], 1);
+        hnsw.insert(&[2.0, 2.0], 2);
+        hnsw.insert(&[3.0, 3.0], 3);
+        hnsw.insert(&[4.0, 4.0], 4);
+        hnsw.insert(&[5.0, 5.0], 5);
+        hnsw.insert(&[6.0, 6.0], 6);
+        hnsw.insert(&[7.0, 7.0], 7);
+        hnsw.insert(&[8.0, 8.0], 8);
+        hnsw.insert(&[9.0, 9.0], 9);
         assert_eq!(
-            hnsw.knn([0.0, 0.0], 3),
+            hnsw.knn(&[0.0, 0.0], 3),
             vec![
                 (0, 0.0),
                 (1, std::f64::consts::SQRT_2),
@@ -268,11 +279,11 @@ mod tests {
     #[test]
     fn test_insert_10000() {
         use microbench::*;
-        let mut hnsw = HNSW::<2, f64, 16>::new(16, Distance::Euclidean);
+        let mut hnsw = HNSW::<f64, 16>::new(16, Distance::Euclidean,2);
         let bench_options = Options::default();
         microbench::bench(&bench_options, "test_insert_10000", || {
             for i in 0..10000 {
-                hnsw.insert([i as f64, i as f64], i);
+                hnsw.insert(&[i as f64, i as f64], i);
             }
         });
     }
