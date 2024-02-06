@@ -25,10 +25,7 @@ impl<F: Float + Debug  + Default> PartialOrd for Neighbor<F> {
 }
 impl<F: Float + Debug  + Default> Ord for Neighbor<F> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match self.distance.partial_cmp(&other.distance) {
-            Some(ord) => ord,
-            None => std::cmp::Ordering::Equal,
-        }
+        self.distance.partial_cmp(&other.distance).unwrap_or_else(|| std::cmp::Ordering::Equal)
     }
 }
 
@@ -91,7 +88,7 @@ impl<const DIM: usize, F: Float + Debug  + Default, const M: usize> HNSW<DIM, F,
     }
     pub fn insert(&mut self, q: [F; DIM], swid: Swid) {
         let l =
-            ((-(rand_f()).ln() * (1.0f64 / (16.0f64).ln())).floor() as usize).min(MAX_LAYER - 1);
+            ((-rand_f().ln() * (1.0f64 / 16.0f64.ln())).floor() as usize).min(MAX_LAYER - 1);
         let mut ep = 0;
         for lc in (l..MAX_LAYER).rev() {
             ep = match self.search_layer(q, ep, 1, lc).first() {
