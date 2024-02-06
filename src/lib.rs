@@ -1,7 +1,7 @@
 use num_traits::Float;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::{collections::BTreeSet, fmt::Debug, sync::atomic};
+use std::{collections::BTreeSet, fmt::Debug};
+use num_traits::real::Real;
+use num_traits::NumCast;
 
 type Swid = u128;
 type NodeID = usize;
@@ -71,15 +71,15 @@ fn get_distance<const DIM: usize, F: Float + Debug + Default>(
     sum.sqrt()
 }
 
-static RNG: atomic::AtomicUsize = atomic::AtomicUsize::new(0);
+/// Returns a number in the range [0, 1)
+#[inline]
 fn rand_f() -> f64 {
-    let rng = RNG.fetch_add(1, atomic::Ordering::Relaxed);
-    let mut s = DefaultHasher::new();
-    rng.hash(&mut s);
-    s.finish() as f64 / u64::MAX as f64
+    return rand::random::<f64>();
 }
 
-impl<const DIM: usize, F: Float + Debug  + Default, const M: usize> HNSW<DIM, F, M> {
+impl<const DIM: usize, F: Float + Debug + Default, const M: usize> HNSW<DIM, F, M>
+    where rand::distributions::Standard: rand::prelude::Distribution<F>
+{
     pub fn new(ef_construction: usize) -> HNSW<DIM, F, M> {
         let layers: [Vec<Node<DIM, F, M>>; MAX_LAYER] = Default::default();
         HNSW {
@@ -199,7 +199,6 @@ impl<const DIM: usize, F: Float + Debug  + Default, const M: usize> HNSW<DIM, F,
 
 #[cfg(test)]
 mod tests {
-    use microbench::bench;
     use super::*;
 
     #[test]
