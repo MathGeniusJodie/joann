@@ -40,6 +40,7 @@ pub struct HNSW<const DIM: usize, F: Float + Debug + Default, const M: usize> {
     layers: [Vec<Node<DIM, F, M>>; MAX_LAYER],
     base_layer: Vec<BaseNode<DIM, F, M>>,
     ef_construction: usize,
+    space: Distance,
 }
 
 #[derive(Debug)]
@@ -60,13 +61,55 @@ impl<const DIM: usize, F: Float + Debug + Default, const M: usize> Node<DIM, F, 
     }
 }
 
-fn get_distance<const DIM: usize, F: Float + Debug + Default>(a: &[F; DIM], b: &[F; DIM]) -> F {
-    let mut sum: F = F::zero();
-    for i in 0..DIM {
-        let diff = a[i] - b[i];
-        sum = diff.mul_add(diff, sum);
+#[derive(Debug, Clone, Copy)]
+pub enum Distance {
+    Euclidean,
+    Cosine,
+    L2,
+    IP,
+}
+
+fn get_distance<const DIM: usize, F: Float + Debug + Default>(
+    a: &[F; DIM],
+    b: &[F; DIM],
+    space: Distance,
+) -> F {
+    match space {
+        Distance::Euclidean => {
+            let mut sum: F = F::zero();
+            for i in 0..DIM {
+                let diff = a[i] - b[i];
+                sum = diff.mul_add(diff, sum);
+            }
+            sum.sqrt()
+        }
+        Distance::Cosine => {
+            let mut dot: F = F::zero();
+            let mut norm_a: F = F::zero();
+            let mut norm_b: F = F::zero();
+            for i in 0..DIM {
+                dot = a[i].mul_add(b[i], dot);
+                norm_a = a[i].mul_add(a[i], norm_a);
+                norm_b = b[i].mul_add(b[i], norm_b);
+            }
+            dot / (norm_a.sqrt() * norm_b.sqrt())
+        }
+        Distance::L2 => {
+            let mut sum: F = F::zero();
+            for i in 0..DIM {
+                let diff = a[i] - b[i];
+                sum = diff.mul_add(diff, sum);
+            }
+            sum
+        }
+        Distance::IP => {
+            let mut dot: F = F::zero();
+            for i in 0..DIM {
+                dot = a[i].mul_add(b[i], dot);
+            }
+            dot
+        }
     }
-    sum.sqrt()
 }
 
 /// Returns a number in the range [0, 1)
@@ -79,12 +122,13 @@ impl<const DIM: usize, F: Float + Debug + Default, const M: usize> HNSW<DIM, F, 
 where
     rand::distributions::Standard: rand::prelude::Distribution<F>,
 {
-    pub fn new(ef_construction: usize) -> HNSW<DIM, F, M> {
+    pub fn new(ef_construction: usize, space: Distance) -> HNSW<DIM, F, M> {
         let layers: [Vec<Node<DIM, F, M>>; MAX_LAYER] = Default::default();
         HNSW {
             layers,
             base_layer: Vec::new(),
             ef_construction,
+            space,
         }
     }
     pub fn insert(&mut self, q: [F; DIM], swid: Swid) {
@@ -117,7 +161,7 @@ where
         self.base_layer.push(BaseNode { vector: q, swid });
     }
     pub fn remove(&mut self, swid: Swid) {
-        let mut new_hnsw = HNSW::new(self.ef_construction);
+        let mut new_hnsw = HNSW::new(self.ef_construction, self.space);
         for node in &self.base_layer {
             if node.swid != swid {
                 new_hnsw.insert(node.vector, node.swid);
@@ -130,7 +174,7 @@ where
         if self.layers[layer].is_empty() {
             return Vec::new();
         }
-        let ep_dist = get_distance(&self.get_base(layer, ep).vector, &q);
+        let ep_dist = get_distance(&self.get_base(layer, ep).vector, &q, self.space);
         let mut visited = BTreeSet::new();
         let mut candidates = BTreeSet::new();
         let mut result = BTreeSet::new();
@@ -155,7 +199,7 @@ where
                 }
                 visited.insert(e.id);
                 let f = result.last().unwrap();
-                let d_e = get_distance(&self.get_base(layer, e.id).vector, &q);
+                let d_e = get_distance(&self.get_base(layer, e.id).vector, &q, self.space);
                 if d_e < f.distance || result.len() < ef {
                     candidates.insert(Neighbor {
                         id: e.id,
@@ -201,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_hnsw() {
-        let mut hnsw = HNSW::<2, f64, 16>::new(16);
+        let mut hnsw = HNSW::<2, f64, 16>::new(16, Distance::Euclidean);
         hnsw.insert([0.0, 0.0], 0);
         hnsw.insert([1.0, 1.0], 1);
         hnsw.insert([2.0, 2.0], 2);
@@ -225,7 +269,7 @@ mod tests {
     #[test]
     fn test_insert_10000() {
         use microbench::*;
-        let mut hnsw = HNSW::<2, f64, 16>::new(16);
+        let mut hnsw = HNSW::<2, f64, 16>::new(16, Distance::Euclidean);
         let bench_options = Options::default();
         microbench::bench(&bench_options, "test_insert_10000", || {
             for i in 0..10000 {
