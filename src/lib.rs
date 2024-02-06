@@ -1,7 +1,5 @@
 use num_traits::Float;
 use std::{collections::BTreeSet, fmt::Debug};
-use num_traits::real::Real;
-use num_traits::NumCast;
 
 type Swid = u128;
 type NodeID = usize;
@@ -17,40 +15,42 @@ impl<F: Float + Debug + Default> PartialEq for Neighbor<F> {
         self.distance == other.distance
     }
 }
-impl<F: Float + Debug  + Default> Eq for Neighbor<F> {}
-impl<F: Float + Debug  + Default> PartialOrd for Neighbor<F> {
+impl<F: Float + Debug + Default> Eq for Neighbor<F> {}
+impl<F: Float + Debug + Default> PartialOrd for Neighbor<F> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
-impl<F: Float + Debug  + Default> Ord for Neighbor<F> {
+impl<F: Float + Debug + Default> Ord for Neighbor<F> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.distance.partial_cmp(&other.distance).unwrap_or_else(|| std::cmp::Ordering::Equal)
+        self.distance
+            .partial_cmp(&other.distance)
+            .unwrap_or(std::cmp::Ordering::Equal)
     }
 }
 
 #[derive(Debug)]
-struct BaseNode<const DIM: usize, F: Float + Debug  + Default, const M: usize> {
+struct BaseNode<const DIM: usize, F: Float + Debug + Default, const M: usize> {
     vector: [F; DIM],
     swid: Swid,
 }
 
 #[derive(Debug)]
-pub struct HNSW<const DIM: usize, F: Float + Debug  + Default, const M: usize> {
+pub struct HNSW<const DIM: usize, F: Float + Debug + Default, const M: usize> {
     layers: [Vec<Node<DIM, F, M>>; MAX_LAYER],
     base_layer: Vec<BaseNode<DIM, F, M>>,
     ef_construction: usize,
 }
 
 #[derive(Debug)]
-struct Node<const DIM: usize, F: Float + Debug  + Default, const M: usize> {
+struct Node<const DIM: usize, F: Float + Debug + Default, const M: usize> {
     neighbors: [Neighbor<F>; M],
     n_neighbors: u8,
     lower_id: NodeID,
 }
-impl<const DIM: usize, F: Float + Debug  + Default, const M: usize> Node<DIM, F, M> {
+impl<const DIM: usize, F: Float + Debug + Default, const M: usize> Node<DIM, F, M> {
     fn insert_neighbor(&mut self, neighbor: Neighbor<F>) {
-        if let Err(mut i) = self.neighbors[..self.n_neighbors as usize].binary_search(&neighbor) {
+        if let Err(i) = self.neighbors[..self.n_neighbors as usize].binary_search(&neighbor) {
             if i < M {
                 self.n_neighbors = (self.n_neighbors + 1).min(M as u8);
                 self.neighbors[i..self.n_neighbors as usize].rotate_right(1);
@@ -60,10 +60,7 @@ impl<const DIM: usize, F: Float + Debug  + Default, const M: usize> Node<DIM, F,
     }
 }
 
-fn get_distance<const DIM: usize, F: Float + Debug + Default>(
-    a: &[F; DIM],
-    b: &[F; DIM],
-) -> F {
+fn get_distance<const DIM: usize, F: Float + Debug + Default>(a: &[F; DIM], b: &[F; DIM]) -> F {
     let mut sum: F = F::zero();
     for i in 0..DIM {
         sum = sum + (a[i] - b[i]) * (a[i] - b[i]);
@@ -74,11 +71,12 @@ fn get_distance<const DIM: usize, F: Float + Debug + Default>(
 /// Returns a number in the range [0, 1)
 #[inline]
 fn rand_f() -> f64 {
-    return rand::random::<f64>();
+    rand::random::<f64>()
 }
 
 impl<const DIM: usize, F: Float + Debug + Default, const M: usize> HNSW<DIM, F, M>
-    where rand::distributions::Standard: rand::prelude::Distribution<F>
+where
+    rand::distributions::Standard: rand::prelude::Distribution<F>,
 {
     pub fn new(ef_construction: usize) -> HNSW<DIM, F, M> {
         let layers: [Vec<Node<DIM, F, M>>; MAX_LAYER] = Default::default();
@@ -89,8 +87,7 @@ impl<const DIM: usize, F: Float + Debug + Default, const M: usize> HNSW<DIM, F, 
         }
     }
     pub fn insert(&mut self, q: [F; DIM], swid: Swid) {
-        let l =
-            ((-rand_f().ln() * (1.0f64 / 16.0f64.ln())).floor() as usize).min(MAX_LAYER - 1);
+        let l = ((-rand_f().ln() * (1.0f64 / 16.0f64.ln())).floor() as usize).min(MAX_LAYER - 1);
         let mut ep = 0;
         for lc in (l..MAX_LAYER).rev() {
             ep = match self.search_layer(q, ep, 1, lc).first() {
@@ -214,7 +211,14 @@ mod tests {
         hnsw.insert([7.0, 7.0], 7);
         hnsw.insert([8.0, 8.0], 8);
         hnsw.insert([9.0, 9.0], 9);
-        assert_eq!(hnsw.knn([0.0, 0.0], 3), vec![(0, 0.0), (1, std::f64::consts::SQRT_2), (2, 2.0 * std::f64::consts::SQRT_2)]);
+        assert_eq!(
+            hnsw.knn([0.0, 0.0], 3),
+            vec![
+                (0, 0.0),
+                (1, std::f64::consts::SQRT_2),
+                (2, 2.0 * std::f64::consts::SQRT_2)
+            ]
+        );
     }
 
     #[test]
