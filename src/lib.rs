@@ -113,7 +113,7 @@ impl<const DIM: usize, F: Float + Debug + Default, const M: usize> HNSW<DIM, F, 
             self.layers[lc].push(Node {
                 neighbors: n.try_into().unwrap(),
                 n_neighbors: (nl as u8).min(M as u8),
-                lower_id: if lc == 0 { self.base_layer.len() } else { qid }, // todo: check if this is correct (off by one?)
+                lower_id: if lc == 0 { self.base_layer.len() } else { qid },
             });
         }
         self.base_layer.push(BaseNode { vector: q, swid });
