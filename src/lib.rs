@@ -118,10 +118,7 @@ fn rand_f() -> f64 {
     rand::random::<f64>()
 }
 
-impl<const DIM: usize, F: Float + Debug + Default, const M: usize> HNSW<DIM, F, M>
-where
-    rand::distributions::Standard: rand::prelude::Distribution<F>,
-{
+impl<const DIM: usize, F: Float + Debug + Default, const M: usize> HNSW<DIM, F, M> {
     pub fn new(ef_construction: usize, space: Distance) -> HNSW<DIM, F, M> {
         let layers: [Vec<Node<DIM, F, M>>; MAX_LAYER] = Default::default();
         HNSW {
