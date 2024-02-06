@@ -63,7 +63,8 @@ impl<const DIM: usize, F: Float + Debug + Default, const M: usize> Node<DIM, F, 
 fn get_distance<const DIM: usize, F: Float + Debug + Default>(a: &[F; DIM], b: &[F; DIM]) -> F {
     let mut sum: F = F::zero();
     for i in 0..DIM {
-        sum = sum + (a[i] - b[i]) * (a[i] - b[i]);
+        let diff = a[i] - b[i];
+        sum = diff.mul_add(diff, sum);
     }
     sum.sqrt()
 }
@@ -87,7 +88,7 @@ where
         }
     }
     pub fn insert(&mut self, q: [F; DIM], swid: Swid) {
-        let l = ((-rand_f().ln() * (1.0f64 / 16.0f64.ln())).floor() as usize).min(MAX_LAYER - 1);
+        let l = ((-rand_f().ln() * (1.0f64 / 16.0f64.ln())) as usize).min(MAX_LAYER - 1);
         let mut ep = 0;
         for lc in (l..MAX_LAYER).rev() {
             ep = match self.search_layer(q, ep, 1, lc).first() {
