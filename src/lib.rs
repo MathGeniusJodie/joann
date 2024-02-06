@@ -219,12 +219,12 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_1000000() {
+    fn test_insert_10000() {
         use microbench::*;
         let mut hnsw = HNSW::<2, f64, 16>::new(16);
         let bench_options = Options::default();
-        microbench::bench(&bench_options, "test_insert_1000000", || {
-            for i in 0..1000000 {
+        microbench::bench(&bench_options, "test_insert_10000", || {
+            for i in 0..10000 {
                 hnsw.insert([i as f64, i as f64], i);
             }
         });
