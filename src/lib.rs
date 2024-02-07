@@ -110,7 +110,7 @@ impl<F: Float + Debug + Default> HNSW<F> {
         let l =
             ((-rand::random::<f64>().ln() * (1.0f64 / 16.0f64.ln())) as usize).min(MAX_LAYER - 1);
         let mut ep = 0;
-        for lc in (l..MAX_LAYER).rev() {
+        for lc in (l+1..MAX_LAYER).rev() {
             ep = match self.search_layer(q, ep, 1, lc).first() {
                 Some(n) => self.layers[lc][n.id].lower_id,
                 None => 0,
@@ -129,9 +129,14 @@ impl<F: Float + Debug + Default> HNSW<F> {
                     self.layers[lc][neighbor.id].neighbors.pop_last();
                 }
             }
+            let lower_id = if lc == 0 { self.swid_layer.len() } else { self.layers[lc-1].len() };
+            ep = match n.first() {
+                Some(n) => self.layers[lc][n.id].lower_id,
+                None => 0,
+            };
             self.layers[lc].push(Node {
                 neighbors: n.into_iter().take(self.m).collect(),
-                lower_id: if lc == 0 { self.swid_layer.len() } else { qid },
+                lower_id
             });
         }
         self.swid_layer.push(swid);
@@ -249,6 +254,7 @@ mod tests {
         hnsw.insert(&[7.0, 7.0], 7);
         hnsw.insert(&[8.0, 8.0], 8);
         hnsw.insert(&[9.0, 9.0], 9);
+        dbg!(&hnsw);
         assert_eq!(
             hnsw.knn(&[0.0, 0.0], 3),
             vec![
