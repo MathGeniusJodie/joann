@@ -111,16 +111,11 @@ impl<F: Float + Debug + Default> HNSW<F> {
             ((-rand::random::<f64>().ln() * (1.0f64 / 16.0f64.ln())) as usize).min(MAX_LAYER - 1);
         let mut ep = 0;
         for lc in (l + 1..MAX_LAYER).rev() {
-            ep = match self.search_layer(q, ep, 1, lc).first() {
+            ep = match self.search_layer(q, ep, self.m, lc).first() {
                 Some(n) => self.layers[lc][n.id].lower_id,
                 None => 0,
             };
         }
-
-        ep = match self.search_layer(q, ep, self.ef_construction, l).first() {
-            Some(n) => n.id,
-            None => 0,
-        };
 
         for lc in (0..=l).rev() {
             let n = self.search_layer(q, ep, self.ef_construction, lc);
@@ -233,7 +228,7 @@ impl<F: Float + Debug + Default> HNSW<F> {
         let ef_search = self.ef_construction.max(k);
         let mut ep = 0;
         for lc in (1..MAX_LAYER).rev() {
-            ep = match self.search_layer(q, ep, 1, lc).first() {
+            ep = match self.search_layer(q, ep, self.m, lc).first() {
                 Some(n) => self.layers[lc][n.id].lower_id,
                 None => 0,
             };
