@@ -32,9 +32,9 @@ impl<F: Float + Debug + Default> Ord for Neighbor<F> {
 #[derive(Debug)]
 pub struct HNSW<F: Float + Debug + Default> {
     layers: [Vec<Node<F>>; MAX_LAYER],
-    dimensions: usize,
-    swid_layer: Vec<Swid>,
-    vector_layer: Vec<F>,
+    pub dimensions: usize,
+    pub swid_layer: Vec<Swid>,
+    pub vector_layer: Vec<F>,
     ef_construction: usize,
     space: Distance,
     m: usize,
