@@ -117,6 +117,11 @@ impl<F: Float + Debug + Default> HNSW<F> {
             };
         }
 
+        ep = match self.search_layer(q, ep, self.ef_construction, l).first() {
+            Some(n) => n.id,
+            None => 0,
+        };
+
         for lc in (0..=l).rev() {
             let n = self.search_layer(q, ep, self.ef_construction, lc);
             let qid = self.layers[lc].len();
