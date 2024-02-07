@@ -35,7 +35,6 @@ impl<F: Float + Debug + Default> Ord for Neighbor<F> {
 pub struct HNSW<F: Float + Debug + Default, const M: usize> {
     layers: [Vec<Node<F, M>>; MAX_LAYER],
     dimensions: usize,
-    //base_layer: Vec<BaseNode<DIM, F>>,
     swid_layer: Vec<Swid>,
     vector_layer: Vec<F>,
     ef_construction: usize,
@@ -123,7 +122,6 @@ impl<F: Float + Debug + Default, const M: usize> HNSW<F, M> {
         HNSW {
             layers,
             dimensions,
-            //base_layer: Vec::new(),
             swid_layer: Vec::new(),
             vector_layer: Vec::new(),
             ef_construction,
@@ -160,17 +158,17 @@ impl<F: Float + Debug + Default, const M: usize> HNSW<F, M> {
         self.swid_layer.push(swid);
         self.vector_layer.extend_from_slice(&q);
     }
-    /*
-    pub fn remove(&mut self, swid: Swid) {
-        let mut new_hnsw = HNSW::new(self.ef_construction, self.space);
-        for node in &self.base_layer {
-            if node.swid != swid {
-                new_hnsw.insert(node.vector, node.swid);
+    pub fn remove(&mut self, swid_to_remove: Swid) {
+        let mut new_hnsw: HNSW<F,M> = HNSW::new(self.ef_construction, self.space, self.dimensions);
+        self.swid_layer.iter().zip(self.vector_layer.chunks(self.dimensions)).for_each(|(swid, vector)| {
+            if *swid != swid_to_remove {
+                new_hnsw.insert(vector, *swid);
             }
-        }
+        });
         self.layers = new_hnsw.layers;
-        self.base_layer = new_hnsw.base_layer;
-    }*/
+        self.swid_layer = new_hnsw.swid_layer;
+        self.vector_layer = new_hnsw.vector_layer;
+    }
     fn search_layer(&self, q: &[F], ep: usize, ef: usize, layer: usize) -> Vec<Neighbor<F>> {
         if self.layers[layer].is_empty() {
             return Vec::new();
