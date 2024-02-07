@@ -46,7 +46,7 @@ pub struct Node<F: Float + Debug + Default> {
     lower_id: NodeID,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Distance {
     Euclidean,
     Cosine,
@@ -233,11 +233,16 @@ impl<F: Float + Debug + Default> HNSW<F> {
                 None => 0,
             };
         }
-        self.search_layer(q, ep, ef_search, 0)
-            .iter()
-            .take(k)
-            .map(|n| (self.get_swid(0, n.id), n.distance))
-            .collect()
+        if self.space == Distance::Cosine {
+            self
+                .search_layer(q, ep, ef_search, 0)
+                .iter()
+                .rev().take(k)
+                .map(|n| (self.get_swid(0, n.id), n.distance)).collect()
+        } else {
+            self.search_layer(q, ep, ef_search, 0).iter().take(k)
+            .map(|n| (self.get_swid(0, n.id), n.distance)).collect()
+        }
     }
 }
 
