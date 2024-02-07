@@ -73,7 +73,7 @@ fn get_distance<F: Float + Debug + Default>(a: &[F], b: &[F], space: Distance) -
                 norm_a = a[i].mul_add(a[i], norm_a);
                 norm_b = b[i].mul_add(b[i], norm_b);
             }
-            dot / (norm_a.sqrt() * norm_b.sqrt())
+            F::one() - dot / (norm_a.sqrt() * norm_b.sqrt())
         }
         Distance::L2 => {
             let mut sum: F = F::zero();
@@ -233,16 +233,10 @@ impl<F: Float + Debug + Default> HNSW<F> {
                 None => 0,
             };
         }
-        if self.space == Distance::Cosine {
-            self
-                .search_layer(q, ep, ef_search, 0)
-                .iter()
-                .rev().take(k)
-                .map(|n| (self.get_swid(0, n.id), n.distance)).collect()
-        } else {
-            self.search_layer(q, ep, ef_search, 0).iter().take(k)
+
+        self.search_layer(q, ep, ef_search, 0).iter().take(k)
             .map(|n| (self.get_swid(0, n.id), n.distance)).collect()
-        }
+
     }
 }
 
