@@ -1,8 +1,6 @@
 use num_traits::Float;
 use std::{collections::BTreeSet, fmt::Debug};
 
-mod forever_vec;
-
 type Swid = u128;
 type NodeID = usize;
 const MAX_LAYER: usize = 16;
@@ -32,31 +30,20 @@ impl<F: Float + Debug + Default> Ord for Neighbor<F> {
 }
 
 #[derive(Debug)]
-pub struct HNSW<F: Float + Debug + Default, const M: usize> {
-    layers: [Vec<Node<F, M>>; MAX_LAYER],
+pub struct HNSW<F: Float + Debug + Default> {
+    layers: [Vec<Node<F>>; MAX_LAYER],
     dimensions: usize,
     swid_layer: Vec<Swid>,
     vector_layer: Vec<F>,
     ef_construction: usize,
     space: Distance,
+    m: usize,
 }
 
 #[derive(Debug)]
-struct Node<F: Float + Debug + Default, const M: usize> {
-    neighbors: [Neighbor<F>; M],
-    n_neighbors: usize,
+struct Node<F: Float + Debug + Default> {
+    neighbors: BTreeSet<Neighbor<F>>,
     lower_id: NodeID,
-}
-impl<F: Float + Debug + Default, const M: usize> Node<F, M> {
-    fn insert_neighbor(&mut self, neighbor: Neighbor<F>) {
-        if let Err(i) = self.neighbors[..self.n_neighbors as usize].binary_search(&neighbor) {
-            if i < M {
-                self.n_neighbors = (self.n_neighbors + 1).min(M);
-                self.neighbors[i..self.n_neighbors as usize].rotate_right(1);
-                self.neighbors[i] = neighbor;
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -67,11 +54,7 @@ pub enum Distance {
     IP,
 }
 
-fn get_distance<F: Float + Debug + Default>(
-    a: &[F],
-    b: &[F],
-    space: Distance,
-) -> F {
+fn get_distance<F: Float + Debug + Default>(a: &[F], b: &[F], space: Distance) -> F {
     match space {
         Distance::Euclidean => {
             let mut sum: F = F::zero();
@@ -110,15 +93,9 @@ fn get_distance<F: Float + Debug + Default>(
     }
 }
 
-/// Returns a number in the range [0, 1)
-#[inline]
-fn rand_f() -> f64 {
-    rand::random::<f64>()
-}
-
-impl<F: Float + Debug + Default, const M: usize> HNSW<F, M> {
-    pub fn new(ef_construction: usize, space: Distance, dimensions:usize) -> HNSW<F, M> {
-        let layers: [Vec<Node<F, M>>; MAX_LAYER] = Default::default();
+impl<F: Float + Debug + Default> HNSW<F> {
+    pub fn new(ef_construction: usize, space: Distance, dimensions: usize, m: usize) -> HNSW<F> {
+        let layers: [Vec<Node<F>>; MAX_LAYER] = Default::default();
         HNSW {
             layers,
             dimensions,
@@ -126,10 +103,12 @@ impl<F: Float + Debug + Default, const M: usize> HNSW<F, M> {
             vector_layer: Vec::new(),
             ef_construction,
             space,
+            m,
         }
     }
     pub fn insert(&mut self, q: &[F], swid: Swid) {
-        let l = ((-rand_f().ln() * (1.0f64 / 16.0f64.ln())) as usize).min(MAX_LAYER - 1);
+        let l =
+            ((-rand::random::<f64>().ln() * (1.0f64 / 16.0f64.ln())) as usize).min(MAX_LAYER - 1);
         let mut ep = 0;
         for lc in (l..MAX_LAYER).rev() {
             ep = match self.search_layer(q, ep, 1, lc).first() {
@@ -139,32 +118,36 @@ impl<F: Float + Debug + Default, const M: usize> HNSW<F, M> {
         }
 
         for lc in (0..=l).rev() {
-            let mut n = self.search_layer(q, ep, self.ef_construction, lc);
-            let nl = n.len();
+            let n = self.search_layer(q, ep, self.ef_construction, lc);
             let qid = self.layers[lc].len();
             for neighbor in &n {
-                self.layers[lc][neighbor.id].insert_neighbor(Neighbor {
+                self.layers[lc][neighbor.id].neighbors.insert(Neighbor {
                     id: qid,
                     distance: neighbor.distance,
                 });
+                if self.layers[lc][neighbor.id].neighbors.len() > self.m {
+                    self.layers[lc][neighbor.id].neighbors.pop_last();
+                }
             }
-            n.resize(M, Neighbor::default());
             self.layers[lc].push(Node {
-                neighbors: n.try_into().unwrap(),
-                n_neighbors: (nl).min(M),
+                neighbors: n.into_iter().take(self.m).collect(),
                 lower_id: if lc == 0 { self.swid_layer.len() } else { qid },
             });
         }
         self.swid_layer.push(swid);
-        self.vector_layer.extend_from_slice(&q);
+        self.vector_layer.extend_from_slice(q);
     }
     pub fn remove(&mut self, swid_to_remove: Swid) {
-        let mut new_hnsw: HNSW<F,M> = HNSW::new(self.ef_construction, self.space, self.dimensions);
-        self.swid_layer.iter().zip(self.vector_layer.chunks(self.dimensions)).for_each(|(swid, vector)| {
-            if *swid != swid_to_remove {
-                new_hnsw.insert(vector, *swid);
-            }
-        });
+        let mut new_hnsw: HNSW<F> =
+            HNSW::new(self.ef_construction, self.space, self.dimensions, self.m);
+        self.swid_layer
+            .iter()
+            .zip(self.vector_layer.chunks(self.dimensions))
+            .for_each(|(swid, vector)| {
+                if *swid != swid_to_remove {
+                    new_hnsw.insert(vector, *swid);
+                }
+            });
         self.layers = new_hnsw.layers;
         self.swid_layer = new_hnsw.swid_layer;
         self.vector_layer = new_hnsw.vector_layer;
@@ -173,7 +156,7 @@ impl<F: Float + Debug + Default, const M: usize> HNSW<F, M> {
         if self.layers[layer].is_empty() {
             return Vec::new();
         }
-        let ep_dist = get_distance(self.get_vector(layer, ep), &q, self.space);
+        let ep_dist = get_distance(self.get_vector(layer, ep), q, self.space);
         let mut visited = BTreeSet::new();
         let mut candidates = BTreeSet::new();
         let mut result = BTreeSet::new();
@@ -192,14 +175,13 @@ impl<F: Float + Debug + Default, const M: usize> HNSW<F, M> {
             if c.distance > f.distance {
                 break;
             }
-            for i in 0..self.layers[layer][c.id].n_neighbors {
-                let e = self.layers[layer][c.id].neighbors[i];
+            for e in &self.layers[layer][c.id].neighbors {
                 if visited.contains(&e.id) {
                     continue;
                 }
                 visited.insert(e.id);
                 let f = result.last().unwrap();
-                let d_e = get_distance(self.get_vector(layer, e.id), &q, self.space);
+                let d_e = get_distance(self.get_vector(layer, e.id), q, self.space);
                 if d_e < f.distance || result.len() < ef {
                     candidates.insert(Neighbor {
                         id: e.id,
@@ -225,7 +207,10 @@ impl<F: Float + Debug + Default, const M: usize> HNSW<F, M> {
     fn get_vector(&self, layer: usize, id: NodeID) -> &[F] {
         let lower = self.layers[layer][id].lower_id;
         if layer == 0 {
-            &self.vector_layer[lower*self.dimensions..(lower+1)*self.dimensions]
+            self.vector_layer
+                .chunks(self.dimensions)
+                .nth(lower)
+                .unwrap()
         } else {
             self.get_vector(layer - 1, lower)
         }
@@ -253,7 +238,7 @@ mod tests {
 
     #[test]
     fn test_hnsw() {
-        let mut hnsw = HNSW::<f64, 16>::new(16, Distance::Euclidean, 2);
+        let mut hnsw = HNSW::<f64>::new(16, Distance::Euclidean, 2, 16);
         hnsw.insert(&[0.0, 0.0], 0);
         hnsw.insert(&[1.0, 1.0], 1);
         hnsw.insert(&[2.0, 2.0], 2);
@@ -277,12 +262,22 @@ mod tests {
     #[test]
     fn test_insert_10000() {
         use microbench::*;
-        let mut hnsw = HNSW::<f64, 16>::new(16, Distance::Euclidean,2);
+        let mut hnsw = HNSW::<f64>::new(16, Distance::Euclidean, 2, 16);
         let bench_options = Options::default();
         microbench::bench(&bench_options, "test_insert_10000", || {
             for i in 0..10000 {
                 hnsw.insert(&[i as f64, i as f64], i);
             }
         });
+        microbench::bench(&bench_options, "test_knn_10000", || {
+            for i in 0..10000 {
+                hnsw.knn(&[i as f64, i as f64], 3);
+            }
+        });
+        print!("{}\n", hnsw.layers[0].len());
+        print!("{}\n", hnsw.layers[1].len());
+        print!("{}\n", hnsw.layers[2].len());
+        print!("{}\n", hnsw.layers[3].len());
+        print!("{}\n", hnsw.layers[4].len());
     }
 }
