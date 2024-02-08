@@ -230,6 +230,12 @@ impl<F: Float + Debug + Default> HNSW<F> {
                         id: e.id,
                         distance: d_e,
                     });
+                    // forgot this bit earlier
+                    if result.len() > ef {
+                        result.sort();
+                        result.truncate(ef);
+                        max_dist = result.last().unwrap().distance;
+                    }
                 }
             }
         }
