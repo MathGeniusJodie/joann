@@ -78,19 +78,19 @@ fn get_distance<F: Float + Debug + Default>(a: &[F], b: &[F], space: Distance) -
             sum.sqrt()
         }
         Distance::Cosine => {
-            let mut dot: F = F::zero();
-            let mut norm_a: F = F::zero();
-            let mut norm_b: F = F::zero();
+            let mut dot = F::zero();
+            let mut xx = F::zero();
+            let mut yy = F::zero();
+
             for i in 0..a.len() {
-                dot = a[i].mul_add(b[i], dot);
-                norm_a = a[i].mul_add(a[i], norm_a);
-                norm_b = b[i].mul_add(b[i], norm_b);
+                let xi = a[i];
+                let yi = b[i];
+                dot = dot + xi * yi;
+                xx = xx + xi * xi;
+                yy = yy + yi * yi;
             }
-            let norm = (norm_a.sqrt() * norm_b.sqrt());
-            if norm == F::zero() {
-                return F::zero();
-            }
-            F::one() - dot / (norm_a.sqrt() * norm_b.sqrt())
+
+            dot / (xx * yy).sqrt()
         }
         Distance::L2 => {
             let mut sum: F = F::zero();
