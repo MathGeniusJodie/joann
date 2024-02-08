@@ -90,6 +90,11 @@ fn get_distance<F: Float + Debug + Default>(a: &[F], b: &[F], space: Distance) -
                 yy = yy + yi * yi;
             }
 
+            //handle a==b
+            if xx == F::zero() || yy == F::zero() {
+                return F::zero();
+            }
+
             F::one() - dot / (xx * yy).sqrt()
         }
         Distance::L2 => {
