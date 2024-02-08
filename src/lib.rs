@@ -1,8 +1,7 @@
+use bit_vec::BitVec;
 use num_traits::Float;
-use std::cmp::max;
 use std::collections::BTreeSet;
 use std::fmt::Debug;
-use tinyset::setusize::SetUsize;
 
 type Swid = u128;
 type NodeID = usize;
@@ -57,6 +56,7 @@ pub enum Distance {
     IP,
 }
 
+#[inline(never)]
 fn get_distance<F: Float + Debug + Default>(a: &[F], b: &[F], space: Distance) -> F {
     match space {
         Distance::Euclidean => {
@@ -128,14 +128,16 @@ impl<F: Float + Debug + Default> HNSW<F> {
                     id: qid,
                     distance: neighbor.distance,
                 };
-                let i = match self.layers[lc][neighbor.id].neighbors.binary_search(&new_neighbor){
+                let i = match self.layers[lc][neighbor.id]
+                    .neighbors
+                    .binary_search(&new_neighbor)
+                {
                     Ok(i) => i,
                     Err(i) => i,
                 };
-                self.layers[lc][neighbor.id].neighbors.insert(
-                    i,
-                    new_neighbor
-                );
+                self.layers[lc][neighbor.id]
+                    .neighbors
+                    .insert(i, new_neighbor);
                 self.layers[lc][neighbor.id].neighbors.truncate(self.m);
             }
             let lower_id = if lc == 0 {
@@ -175,10 +177,10 @@ impl<F: Float + Debug + Default> HNSW<F> {
             return Vec::new();
         }
         let ep_dist = get_distance(self.get_vector(layer, ep), q, self.space);
-        let mut visited = SetUsize::new();
+        let mut visited = BitVec::from_elem(self.layers[layer].len(), false);
         let mut candidates = BTreeSet::new();
-        let mut result = Vec::new();
-        visited.insert(ep);
+        let mut result = Vec::with_capacity(ef);
+        visited.set(ep, true);
         candidates.insert(Neighbor {
             id: ep,
             distance: ep_dist,
@@ -194,10 +196,10 @@ impl<F: Float + Debug + Default> HNSW<F> {
                 break;
             }
             for e in &self.layers[layer][c.id].neighbors {
-                if visited.contains(e.id) {
+                if visited.get(e.id).unwrap() {
                     continue;
                 }
-                visited.insert(e.id);
+                visited.set(e.id, true);
                 let d_e = get_distance(self.get_vector(layer, e.id), q, self.space);
                 if d_e < max_dist || result.len() < ef {
                     result.push(Neighbor {
@@ -205,7 +207,8 @@ impl<F: Float + Debug + Default> HNSW<F> {
                         distance: d_e,
                     });
                     max_dist = max_dist.max(d_e);
-                    if d_e < max_dist { // slightly faster
+                    if d_e < max_dist {
+                        // slightly faster
                         candidates.insert(Neighbor {
                             id: e.id,
                             distance: d_e,
@@ -271,7 +274,7 @@ mod tests {
         hnsw.insert(&[7.0, 7.0], 7);
         hnsw.insert(&[8.0, 8.0], 8);
         hnsw.insert(&[9.0, 9.0], 9);
-        dbg!(&hnsw);
+        //dbg!(&hnsw);
         assert_eq!(
             hnsw.knn(&[0.0, 0.0], 3),
             vec![
