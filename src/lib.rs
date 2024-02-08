@@ -95,7 +95,7 @@ fn get_distance<F: Float + Debug + Default>(a: &[F], b: &[F], space: Distance) -
                 return F::zero();
             }
 
-            (F::one() - dot / (xx * yy).sqrt()).max(F::zero())
+            F::one() - dot / (xx * yy).sqrt()
         }
         Distance::L2 => {
             let mut sum: F = F::zero();
@@ -226,10 +226,14 @@ impl<F: Float + Debug + Default> HNSW<F> {
                         distance: d_e,
                     });
                     max_dist = max_dist.max(d_e);
-                    candidates.insert(Neighbor {
+
+                    if !candidates.insert(Neighbor {
                         id: e.id,
                         distance: d_e,
-                    });
+                    }) {
+                        unreachable!("candidates should not be inserted twice")
+                    }
+
                     // forgot this bit earlier
                     if result.len() > ef {
                         result.sort();
@@ -316,7 +320,11 @@ mod tests {
             for i in 0..10000 {
                 hnsw.insert(&[i as f64, i as f64], i);
             }
+            hnsw = HNSW::<f64>::new(16, Distance::Euclidean, 2, 16);
         });
+        for i in 0..10000 {
+            hnsw.insert(&[i as f64, i as f64], i);
+        }
         microbench::bench(&bench_options, "test_knn_10000", || {
             for i in 0..10000 {
                 hnsw.knn(&[i as f64, i as f64], 3);
