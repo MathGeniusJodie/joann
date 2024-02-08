@@ -20,13 +20,7 @@ impl<F: Float + Debug + Default> PartialEq for Neighbor<F> {
 impl<F: Float + Debug + Default> Eq for Neighbor<F> {}
 impl<F: Float + Debug + Default> PartialOrd for Neighbor<F> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        if self.distance == other.distance {
-            return self.id.partial_cmp(&other.id);
-        }
-        match self.distance < other.distance {
-            true => Some(std::cmp::Ordering::Less),
-            false => Some(std::cmp::Ordering::Greater),
-        }
+        Some(self.cmp(other))
     }
 }
 impl<F: Float + Debug + Default> Ord for Neighbor<F> {
@@ -34,10 +28,7 @@ impl<F: Float + Debug + Default> Ord for Neighbor<F> {
         if self.distance == other.distance {
             return self.id.cmp(&other.id);
         }
-        match self.distance < other.distance {
-            true => std::cmp::Ordering::Less,
-            false => std::cmp::Ordering::Greater,
-        }
+        self.distance.partial_cmp(&other.distance).unwrap()
     }
 }
 
