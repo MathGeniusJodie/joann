@@ -14,7 +14,7 @@ struct Neighbor<F: Float + Debug + Default> {
 }
 impl<F: Float + Debug + Default> PartialEq for Neighbor<F> {
     fn eq(&self, other: &Self) -> bool {
-        self.distance == other.distance
+        self.distance == other.distance && self.id == other.id
     }
 }
 impl<F: Float + Debug + Default> Eq for Neighbor<F> {}
@@ -90,7 +90,7 @@ fn get_distance<F: Float + Debug + Default>(a: &[F], b: &[F], space: Distance) -
                 yy = yy + yi * yi;
             }
 
-            //handle a==b
+            //handle 0 vectors
             if xx * yy <= F::zero() {
                 return F::zero();
             }
