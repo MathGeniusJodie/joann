@@ -23,7 +23,7 @@ impl<F: Float + Debug + Default> PartialOrd for Neighbor<F> {
         if self.distance == other.distance {
             return self.id.partial_cmp(&other.id);
         }
-        match self.distance < other.distance{
+        match self.distance < other.distance {
             true => Some(std::cmp::Ordering::Less),
             false => Some(std::cmp::Ordering::Greater),
         }
@@ -34,7 +34,7 @@ impl<F: Float + Debug + Default> Ord for Neighbor<F> {
         if self.distance == other.distance {
             return self.id.cmp(&other.id);
         }
-        match self.distance < other.distance{
+        match self.distance < other.distance {
             true => std::cmp::Ordering::Less,
             false => std::cmp::Ordering::Greater,
         }
@@ -85,6 +85,10 @@ fn get_distance<F: Float + Debug + Default>(a: &[F], b: &[F], space: Distance) -
                 dot = a[i].mul_add(b[i], dot);
                 norm_a = a[i].mul_add(a[i], norm_a);
                 norm_b = b[i].mul_add(b[i], norm_b);
+            }
+            let norm = (norm_a.sqrt() * norm_b.sqrt());
+            if norm == F::zero() {
+                return F::zero();
             }
             F::one() - dot / (norm_a.sqrt() * norm_b.sqrt())
         }
