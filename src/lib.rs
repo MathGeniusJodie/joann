@@ -207,13 +207,10 @@ impl<F: Float + Debug + Default> HNSW<F> {
                         distance: d_e,
                     });
                     max_dist = max_dist.max(d_e);
-                    if d_e < max_dist {
-                        // slightly faster
-                        candidates.insert(Neighbor {
-                            id: e.id,
-                            distance: d_e,
-                        });
-                    }
+                    candidates.insert(Neighbor {
+                        id: e.id,
+                        distance: d_e,
+                    });
                 }
             }
         }
@@ -264,9 +261,6 @@ mod tests {
     #[test]
     fn test_hnsw() {
         let mut hnsw = HNSW::<f64>::new(16, Distance::Euclidean, 2, 16);
-        hnsw.insert(&[0.0, 0.0], 0);
-        hnsw.insert(&[1.0, 1.0], 1);
-        hnsw.insert(&[2.0, 2.0], 2);
         hnsw.insert(&[3.0, 3.0], 3);
         hnsw.insert(&[4.0, 4.0], 4);
         hnsw.insert(&[5.0, 5.0], 5);
@@ -274,13 +268,16 @@ mod tests {
         hnsw.insert(&[7.0, 7.0], 7);
         hnsw.insert(&[8.0, 8.0], 8);
         hnsw.insert(&[9.0, 9.0], 9);
+        hnsw.insert(&[0.0, 0.0], 420);
+        hnsw.insert(&[1.0, 1.0], 69);
+        hnsw.insert(&[2.0, 2.0], 42);
         //dbg!(&hnsw);
         assert_eq!(
             hnsw.knn(&[0.0, 0.0], 3),
             vec![
-                (0, 0.0),
-                (1, std::f64::consts::SQRT_2),
-                (2, 2.0 * std::f64::consts::SQRT_2)
+                (420, 0.0),
+                (69, std::f64::consts::SQRT_2),
+                (42, 2.0 * std::f64::consts::SQRT_2)
             ]
         );
     }
