@@ -1,5 +1,7 @@
 use num_traits::Float;
-use std::{collections::BTreeSet, fmt::Debug};
+use std::collections::BTreeSet;
+use std::fmt::Debug;
+use tinyset::setusize::SetUsize;
 
 type Swid = u128;
 type NodeID = usize;
@@ -166,7 +168,7 @@ impl<F: Float + Debug + Default> HNSW<F> {
             return Vec::new();
         }
         let ep_dist = get_distance(self.get_vector(layer, ep), q, self.space);
-        let mut visited = BTreeSet::new();
+        let mut visited = SetUsize::new();
         let mut candidates = BTreeSet::new();
         let mut result = BTreeSet::new();
         visited.insert(ep);
@@ -185,7 +187,7 @@ impl<F: Float + Debug + Default> HNSW<F> {
                 break;
             }
             for e in &self.layers[layer][c.id].neighbors {
-                if visited.contains(&e.id) {
+                if visited.contains(e.id) {
                     continue;
                 }
                 visited.insert(e.id);
@@ -234,9 +236,11 @@ impl<F: Float + Debug + Default> HNSW<F> {
             };
         }
 
-        self.search_layer(q, ep, ef_search, 0).iter().take(k)
-            .map(|n| (self.get_swid(0, n.id), n.distance)).collect()
-
+        self.search_layer(q, ep, ef_search, 0)
+            .iter()
+            .take(k)
+            .map(|n| (self.get_swid(0, n.id), n.distance))
+            .collect()
     }
 }
 
