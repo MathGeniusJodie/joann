@@ -90,7 +90,7 @@ fn get_distance<F: Float + Debug + Default>(a: &[F], b: &[F], space: Distance) -
                 yy = yy + yi * yi;
             }
 
-            dot / (xx * yy).sqrt()
+            F::one() - dot / (xx * yy).sqrt()
         }
         Distance::L2 => {
             let mut sum: F = F::zero();
