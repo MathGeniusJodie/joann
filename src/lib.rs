@@ -192,9 +192,9 @@ impl<F: Float + Debug + Default> HNSW<F> {
         let mut max_dist = ep_dist;
         while !candidates.is_empty() {
             let c = candidates.pop_first().unwrap();
-            //if c.distance > max_dist {
-            //    break;
-            //}
+            if c.distance > max_dist {
+                break;
+            }
             for e in &self.layers[layer][c.id].neighbors {
                 if visited.get(e.id).unwrap() {
                     continue;
