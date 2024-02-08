@@ -91,7 +91,7 @@ fn get_distance<F: Float + Debug + Default>(a: &[F], b: &[F], space: Distance) -
             }
 
             //handle a==b
-            if xx == F::zero() || yy == F::zero() {
+            if xx * yy <= F::zero() {
                 return F::zero();
             }
 
