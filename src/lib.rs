@@ -1,4 +1,5 @@
 use num_traits::Float;
+use std::cmp::max;
 use std::collections::BTreeSet;
 use std::fmt::Debug;
 use tinyset::setusize::SetUsize;
@@ -44,7 +45,7 @@ pub struct HNSW<F: Float + Debug + Default> {
 
 #[derive(Debug)]
 pub struct Node<F: Float + Debug + Default> {
-    neighbors: BTreeSet<Neighbor<F>>,
+    neighbors: Vec<Neighbor<F>>,
     lower_id: NodeID,
 }
 
@@ -123,13 +124,19 @@ impl<F: Float + Debug + Default> HNSW<F> {
             let n = self.search_layer(q, ep, self.ef_construction, lc);
             let qid = self.layers[lc].len();
             for neighbor in &n {
-                self.layers[lc][neighbor.id].neighbors.insert(Neighbor {
+                let new_neighbor = Neighbor {
                     id: qid,
                     distance: neighbor.distance,
-                });
-                if self.layers[lc][neighbor.id].neighbors.len() > self.m {
-                    self.layers[lc][neighbor.id].neighbors.pop_last();
-                }
+                };
+                let i = match self.layers[lc][neighbor.id].neighbors.binary_search(&new_neighbor){
+                    Ok(i) => i,
+                    Err(i) => i,
+                };
+                self.layers[lc][neighbor.id].neighbors.insert(
+                    i,
+                    new_neighbor
+                );
+                self.layers[lc][neighbor.id].neighbors.truncate(self.m);
             }
             let lower_id = if lc == 0 {
                 self.swid_layer.len()
@@ -170,20 +177,20 @@ impl<F: Float + Debug + Default> HNSW<F> {
         let ep_dist = get_distance(self.get_vector(layer, ep), q, self.space);
         let mut visited = SetUsize::new();
         let mut candidates = BTreeSet::new();
-        let mut result = BTreeSet::new();
+        let mut result = Vec::new();
         visited.insert(ep);
         candidates.insert(Neighbor {
             id: ep,
             distance: ep_dist,
         });
-        result.insert(Neighbor {
+        result.push(Neighbor {
             id: ep,
             distance: ep_dist,
         });
+        let mut max_dist = ep_dist;
         while !candidates.is_empty() {
             let c = candidates.pop_first().unwrap();
-            let f = result.last().unwrap();
-            if c.distance > f.distance {
+            if c.distance > max_dist {
                 break;
             }
             for e in &self.layers[layer][c.id].neighbors {
@@ -191,21 +198,24 @@ impl<F: Float + Debug + Default> HNSW<F> {
                     continue;
                 }
                 visited.insert(e.id);
-                let f = result.last().unwrap();
                 let d_e = get_distance(self.get_vector(layer, e.id), q, self.space);
-                if d_e < f.distance || result.len() < ef {
-                    candidates.insert(Neighbor {
+                if d_e < max_dist || result.len() < ef {
+                    result.push(Neighbor {
                         id: e.id,
                         distance: d_e,
                     });
-                    result.insert(Neighbor {
-                        id: e.id,
-                        distance: d_e,
-                    });
+                    max_dist = max_dist.max(d_e);
+                    if d_e < max_dist { // slightly faster
+                        candidates.insert(Neighbor {
+                            id: e.id,
+                            distance: d_e,
+                        });
+                    }
                 }
             }
         }
-        result.into_iter().collect()
+        result.sort();
+        result
     }
     fn get_swid(&self, layer: usize, id: NodeID) -> Swid {
         let lower = self.layers[layer][id].lower_id;
