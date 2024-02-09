@@ -27,7 +27,10 @@ impl<F: Float + Debug + Default> Ord for Neighbor<F> {
         if self.distance == other.distance {
             return self.id.cmp(&other.id);
         }
-        self.distance.partial_cmp(&other.distance).unwrap()
+        match self.distance.partial_cmp(&other.distance) {
+            Some(ord) => ord,
+            None => std::cmp::Ordering::Equal,
+        }
     }
 }
 
