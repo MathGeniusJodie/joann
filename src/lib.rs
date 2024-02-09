@@ -187,6 +187,18 @@ impl<F: Float + Debug + Default> HNSW<F> {
         if self.layers[layer].is_empty() {
             return Vec::new();
         }
+        if ef > self.layers[layer].len() {
+            let len = self.layers[layer].len();
+            let mut result = Vec::with_capacity(len);
+            for i in 0..len {
+                result.push(Neighbor {
+                    id: i,
+                    distance: get_distance(self.get_vector(layer, i), q, self.space),
+                });
+            }
+            result.sort();
+            return result;
+        }
         let ep_dist = get_distance(self.get_vector(layer, ep), q, self.space);
         let mut visited = BitVec::from_elem(self.layers[layer].len(), false);
         let mut candidates = BTreeSet::new();
