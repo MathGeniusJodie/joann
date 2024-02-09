@@ -1,6 +1,5 @@
 use bit_vec::BitVec;
 use num_traits::Float;
-use std::collections::BTreeSet;
 use std::fmt::Debug;
 
 type Swid = u128;
@@ -135,20 +134,11 @@ impl<F: Float + Debug + Default> HNSW<F> {
             n.truncate(self.m);
             let qid = self.layers[lc].len();
             for neighbor in &n {
-                let new_neighbor = Neighbor {
+                self.layers[lc][neighbor.id].neighbors.push(Neighbor {
                     id: qid,
                     distance: neighbor.distance,
-                };
-                let i = match self.layers[lc][neighbor.id]
-                    .neighbors
-                    .binary_search(&new_neighbor)
-                {
-                    Ok(i) => i,
-                    Err(i) => i,
-                };
-                self.layers[lc][neighbor.id]
-                    .neighbors
-                    .insert(i, new_neighbor);
+                });
+                self.layers[lc][neighbor.id].neighbors.sort();
                 self.layers[lc][neighbor.id].neighbors.truncate(self.m);
             }
             let lower_id = if lc == 0 {
@@ -201,10 +191,10 @@ impl<F: Float + Debug + Default> HNSW<F> {
         }
         let ep_dist = get_distance(self.get_vector(layer, ep), q, self.space);
         let mut visited = BitVec::from_elem(self.layers[layer].len(), false);
-        let mut candidates = BTreeSet::new();
+        let mut candidates = Vec::with_capacity(self.m);
         let mut result = Vec::with_capacity(ef);
         visited.set(ep, true);
-        candidates.insert(Neighbor {
+        candidates.push(Neighbor {
             id: ep,
             distance: ep_dist,
         });
@@ -214,10 +204,11 @@ impl<F: Float + Debug + Default> HNSW<F> {
         });
         let mut max_dist = ep_dist;
         while !candidates.is_empty() {
-            let c = candidates.pop_first().unwrap();
-            //if c.distance > max_dist {
-            //    break;
-            //}
+            candidates.sort_by(|a, b| b.cmp(a));
+            let c = candidates.pop().unwrap();
+            if c.distance > max_dist {
+                break;
+            }
             for e in &self.layers[layer][c.id].neighbors {
                 if visited.get(e.id).unwrap() {
                     continue;
@@ -230,16 +221,12 @@ impl<F: Float + Debug + Default> HNSW<F> {
                         distance: d_e,
                     });
                     max_dist = max_dist.max(d_e);
-
-                    if !candidates.insert(Neighbor {
+                    candidates.push(Neighbor {
                         id: e.id,
                         distance: d_e,
-                    }) {
-                        unreachable!("candidates should not be inserted twice")
-                    }
-
-                    // forgot this bit earlier
+                    });
                     if result.len() > ef {
+                        // TODO: this is not efficient
                         result.sort();
                         result.truncate(ef);
                         max_dist = result.last().unwrap().distance;
@@ -278,7 +265,6 @@ impl<F: Float + Debug + Default> HNSW<F> {
                 None => 0,
             };
         }
-
         self.search_layer(q, ep, ef_search, 0)
             .iter()
             .take(k)
