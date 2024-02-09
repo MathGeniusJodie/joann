@@ -131,7 +131,8 @@ impl<F: Float + Debug + Default> HNSW<F> {
         }
 
         for lc in (0..=l).rev() {
-            let n = self.search_layer(q, ep, self.ef_construction, lc);
+            let mut n = self.search_layer(q, ep, self.ef_construction, lc);
+            n.truncate(self.m);
             let qid = self.layers[lc].len();
             for neighbor in &n {
                 let new_neighbor = Neighbor {
@@ -160,7 +161,7 @@ impl<F: Float + Debug + Default> HNSW<F> {
                 None => 0,
             };
             self.layers[lc].push(Node {
-                neighbors: n.into_iter().take(self.m).collect(),
+                neighbors: n,
                 lower_id,
             });
         }
