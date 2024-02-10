@@ -58,7 +58,24 @@ pub enum Distance {
     L2,
     IP,
 }
-
+fn pop_min<T: Ord>(v: &mut Vec<T>) -> T {
+    let min_index = v
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| a.cmp(b))
+        .unwrap()
+        .0;
+    v.swap_remove(min_index)
+}
+fn pop_max<T: Ord>(v: &mut Vec<T>) -> T {
+    let max_index = v
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| a.cmp(b))
+        .unwrap()
+        .0;
+    v.swap_remove(max_index)
+}
 #[inline(never)]
 fn get_distance<F: Float + Debug + Default>(a: &[F], b: &[F], space: Distance) -> F {
     match space {
@@ -177,9 +194,6 @@ impl<F: Float + Debug + Default> HNSW<F> {
         self.vector_layer = new_hnsw.vector_layer;
     }
     fn search_layer(&self, q: &[F], ep: usize, ef: usize, layer: usize) -> Vec<Neighbor<F>> {
-        if self.layers[layer].is_empty() {
-            return Vec::new();
-        }
         if ef > self.layers[layer].len() {
             let len = self.layers[layer].len();
             let mut result = Vec::with_capacity(len);
@@ -207,8 +221,7 @@ impl<F: Float + Debug + Default> HNSW<F> {
         });
         let mut max_dist = ep_dist;
         while !candidates.is_empty() {
-            candidates.sort_by(|a, b| b.cmp(a));
-            let c = candidates.pop().unwrap();
+            let c = pop_min(&mut candidates);
             if c.distance > max_dist {
                 break;
             }
@@ -229,10 +242,7 @@ impl<F: Float + Debug + Default> HNSW<F> {
                         distance: d_e,
                     });
                     if result.len() > ef {
-                        // TODO: this is not efficient
-                        result.sort();
-                        result.truncate(ef);
-                        max_dist = result.last().unwrap().distance;
+                        max_dist = pop_max(&mut result).distance;
                     }
                 }
             }
@@ -323,10 +333,5 @@ mod tests {
                 hnsw.knn(&[i as f64, i as f64], 3);
             }
         });
-        print!("{}\n", hnsw.layers[0].len());
-        print!("{}\n", hnsw.layers[1].len());
-        print!("{}\n", hnsw.layers[2].len());
-        print!("{}\n", hnsw.layers[3].len());
-        print!("{}\n", hnsw.layers[4].len());
     }
 }
