@@ -350,40 +350,46 @@ impl<F: Float + Debug + Default> VPTree<F> {
     fn recursive_split(&mut self, layer: usize, id: NodeID) {
         if self.layers[layer][id].children.len() > self.m {
             let new_id = self.layers[layer].len();
-            let center = self.layers[layer][id].children.iter().max().unwrap().id;
+            let center = self.layers[layer][id].children.iter().max().unwrap();
+            let center_id = center.id;
+            let center_distance = center.distance;
             let new_node = VPNode {
                 children: Vec::with_capacity(self.m + 1),
                 parent: self.layers[layer][id].parent,
-                center,
+                center: center_id,
             };
             self.layers[layer].push(new_node);
             let mut i = 0;
-            while i < self.layers[layer][id].children.len() {
-                let child = self.layers[layer][id].children[i];
-                let distance = get_distance(
-                    self.get_vector(layer, center),
-                    self.get_vector(layer, child.id),
-                    self.space,
-                );
-                if distance < child.distance {
-                    self.layers[layer][new_id].children.push(Neighbor {
-                        id: child.id,
-                        distance,
-                    });
-                    if layer > 0 {
-                        self.layers[layer - 1][child.id].parent = Some(new_id);
+            if center_distance != F::zero() {
+                while i < self.layers[layer][id].children.len() {
+                    let child = self.layers[layer][id].children[i];
+                    let distance = get_distance(
+                        self.get_vector(layer, center_id),
+                        self.get_vector(layer, child.id),
+                        self.space,
+                    );
+                    if distance < child.distance {
+                        self.layers[layer][new_id].children.push(Neighbor {
+                            id: child.id,
+                            distance,
+                        });
+                        if layer > 0 {
+                            self.layers[layer - 1][child.id].parent = Some(new_id);
+                        }
+                        self.layers[layer][id].children.swap_remove(i);
+                    } else {
+                        i += 1;
                     }
-                    self.layers[layer][id].children.swap_remove(i);
-                } else {
-                    i += 1;
                 }
+            } else {
+                self.layers[layer][new_id].children = self.layers[layer][id].children.split_off(self.m/2);
             }
             if self.layers[layer][id].parent.is_some() {
                 // todo: double check this
                 let parent_id = self.layers[layer][id].parent.unwrap();
                 let parent_center = self.layers[layer + 1][parent_id].center;
                 let distance = get_distance(
-                    self.get_vector(layer, center),
+                    self.get_vector(layer, center_id),
                     self.get_vector(layer + 1, parent_center),
                     self.space,
                 );
