@@ -347,7 +347,7 @@ impl<F: Float + Debug + Default> VPTree<F> {
     fn recursive_split(&mut self, layer: usize, id: NodeID) {
         if self.layers[layer][id].children.len() > self.m {
             let new_id = self.layers[layer].len();
-            let center = pop_max(&mut self.layers[layer][id].children).id;
+            let center = self.layers[layer][id].children.iter().max().unwrap().id;
             let new_node = VPNode {
                 children: Vec::with_capacity(self.m + 1),
                 parent: self.layers[layer][id].parent,
