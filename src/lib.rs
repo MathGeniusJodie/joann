@@ -354,10 +354,8 @@ impl<F: Float + Debug + Default> VPTree<F> {
                 center,
             };
             self.layers[layer].push(new_node);
-            for i in 0..self.layers[layer][id].children.len() {
-                if self.layers[layer][id].children.get(i).is_none() {
-                    continue;
-                }
+            let mut i = 0;
+            while i<self.layers[layer][id].children.len() {
                 let child = self.layers[layer][id].children[i];
                 let distance = get_distance(
                     self.get_vector(layer, center),
@@ -370,6 +368,8 @@ impl<F: Float + Debug + Default> VPTree<F> {
                         distance,
                     });
                     self.layers[layer][id].children.swap_remove(i);
+                } else {
+                    i+=1;
                 }
             }
             if self.layers[layer][id].parent.is_some() {
