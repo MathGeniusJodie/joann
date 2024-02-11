@@ -462,7 +462,10 @@ impl<F: Float + Debug + Default> VPTree<F> {
         res
     }
     fn knn_ids(&self, q: &[F], k: usize) -> Vec<NodeID> {
-        let closest = self.find_closest_node(q).unwrap();
+        let closest = match self.find_closest_node(q){
+            Some(closest) => closest,
+            None => return Vec::new(),
+        };
         let ef = self.ef_construction.max(k);
         // go up layers until ef is reached
         let mut layer = 0;
