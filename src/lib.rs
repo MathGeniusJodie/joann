@@ -368,7 +368,7 @@ impl<F: Float + Debug + Default> VPTree<F> {
                         distance,
                     });
                     if layer > 0 {
-                        self.layers[layer-1][child.id].parent = Some(new_id);
+                        self.layers[layer - 1][child.id].parent = Some(new_id);
                     }
                     self.layers[layer][id].children.swap_remove(i);
                 } else {
@@ -392,24 +392,23 @@ impl<F: Float + Debug + Default> VPTree<F> {
             } else {
                 let new_parent_id = self.layers[layer + 1].len();
                 self.layers[layer + 1].push(VPNode {
-                    children: vec![Neighbor {
-                        id,
-                        distance: F::zero(),
-                    }],
+                    children: vec![
+                        Neighbor {
+                            id,
+                            distance: F::zero(),
+                        },
+                        Neighbor {
+                            id: new_id,
+                            distance: get_distance(
+                                self.get_vector(layer, id),
+                                self.get_vector(layer, new_id),
+                                self.space,
+                            ),
+                        },
+                    ],
                     parent: None,
                     center: id,
                 });
-                let distance = get_distance(
-                    self.get_vector(layer, id),
-                    self.get_vector(layer, new_id),
-                    self.space,
-                );
-                self.layers[layer + 1][new_parent_id]
-                    .children
-                    .push(Neighbor {
-                        id: new_id,
-                        distance,
-                    });
                 self.layers[layer][id].parent = Some(new_parent_id);
                 self.layers[layer][new_id].parent = Some(new_parent_id);
             }
