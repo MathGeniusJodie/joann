@@ -291,7 +291,6 @@ pub struct VPTree<F: Float + Debug + Default> {
     pub dimensions: usize,
     pub swid_layer: Vec<Swid>,
     pub vector_layer: Vec<F>,
-    pub graveyard_layer: BitVec,
     ef_construction: usize,
     space: Distance,
     m: usize,
@@ -312,7 +311,6 @@ impl<F: Float + Debug + Default> VPTree<F> {
             dimensions,
             swid_layer: Vec::new(),
             vector_layer: Vec::new(),
-            graveyard_layer: BitVec::new(),
             ef_construction,
             space,
             m,
@@ -336,7 +334,10 @@ impl<F: Float + Debug + Default> VPTree<F> {
             }
             None => {
                 self.layers[0].push(VPNode {
-                    children: Vec::with_capacity(self.m + 1),
+                    children: vec![Neighbor {
+                        id,
+                        distance: F::zero(),
+                    }],
                     parent: None,
                     center: id,
                 });
@@ -376,7 +377,10 @@ impl<F: Float + Debug + Default> VPTree<F> {
             } else {
                 let new_parent_id = self.layers[layer + 1].len();
                 self.layers[layer + 1].push(VPNode {
-                    children: Vec::with_capacity(self.m + 1),
+                    children: vec![Neighbor {
+                        id,
+                        distance: F::zero(),
+                    }],
                     parent: None,
                     center: id,
                 });
@@ -443,13 +447,28 @@ impl<F: Float + Debug + Default> VPTree<F> {
         }
     }
     pub fn knn(&self, q: &[F], k: usize) -> Vec<(Swid, F)> {
+        let mut res: Vec<(Swid, F)> = self
+            .knn_ids(q, k)
+            .iter()
+            .map(|id| {
+                (
+                    self.swid_layer[*id],
+                    get_distance(self.get_vector(0, *id), q, self.space),
+                )
+            })
+            .collect();
+        res.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        res.truncate(k);
+        res
+    }
+    fn knn_ids(&self, q: &[F], k: usize) -> Vec<NodeID> {
         let closest = self.find_closest_node(q).unwrap();
         let ef = self.ef_construction.max(k);
         // go up layers until ef is reached
         let mut layer = 0;
         let mut id = closest;
         let mut n = self.m;
-        loop{
+        loop {
             if n > ef || self.layers[layer][id].parent.is_none() {
                 break;
             }
@@ -457,25 +476,21 @@ impl<F: Float + Debug + Default> VPTree<F> {
             id = self.layers[layer][id].parent.unwrap();
             layer += 1;
         }
-        // todo: filter out graveyard nodes
-        let mut result: Vec<(Swid, F)> = self.recursively_get_all_children(layer, id).iter().map(|id| {
-            let distance = get_distance(self.get_vector(0, *id), q, self.space);
-            (self.swid_layer[*id], distance)
-        }).collect();
-        result.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-        result.truncate(k);
-        result
+        self.recursively_get_all_children(layer, id)
     }
     fn recursively_get_all_children(&self, layer: usize, id: NodeID) -> Vec<NodeID> {
-        let mut result = Vec::new();
-        self.layers[layer][id].children.iter().for_each(|n| {
-            result.push(n.id);
-        });
-        result.push(self.layers[layer][id].center);
+        let mut result = self.layers[layer][id]
+            .children
+            .iter()
+            .map(|n| n.id)
+            .collect::<Vec<NodeID>>();
         if layer == 0 {
             return result;
         }
-        result = result.iter().flat_map(|id| self.recursively_get_all_children(layer-1, *id)).collect();
+        result = result
+            .iter()
+            .flat_map(|id| self.recursively_get_all_children(layer - 1, *id))
+            .collect();
         result
     }
     pub fn remove(&mut self, swid_to_remove: Swid) {
@@ -487,7 +502,6 @@ impl<F: Float + Debug + Default> VPTree<F> {
         self.layers[0].iter_mut().for_each(|node| {
             node.children.retain(|n| n.id != id);
         });
-        self.graveyard_layer.set(id, true);
     }
 }
 
@@ -561,13 +575,13 @@ mod tests {
                 hnsw.knn(&[i as f64, i as f64], 3);
             }
         });
-        let mut vptree = VPTree::<f64>::new(16, Distance::Euclidean, 2, 16);
+        let mut vptree = VPTree::<f64>::new(16, Distance::Euclidean, 2, 4);
         let bench_options = Options::default();
         microbench::bench(&bench_options, "vp_tree_test_insert_10000", || {
             for i in 0..10000 {
                 vptree.insert(&[i as f64, i as f64], i);
             }
-            vptree = VPTree::<f64>::new(16, Distance::Euclidean, 2, 16);
+            vptree = VPTree::<f64>::new(16, Distance::Euclidean, 2, 4);
         });
         for i in 0..10000 {
             vptree.insert(&[i as f64, i as f64], i);
