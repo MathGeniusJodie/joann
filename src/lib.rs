@@ -373,6 +373,18 @@ impl<F: Float + Debug + Default> VPTree<F> {
                 }
             }
             if self.layers[layer][id].parent.is_some() {
+                // todo: double check this
+                let parent_id = self.layers[layer][id].parent.unwrap();
+                let parent_center = self.layers[layer+1][parent_id].center;
+                let distance = get_distance(
+                    self.get_vector(layer, center),
+                    self.get_vector(layer+1, parent_center),
+                    self.space,
+                );
+                self.layers[layer+1][parent_id].children.push(Neighbor {
+                    id: new_id,
+                    distance,
+                });
                 self.recursive_split(layer + 1, self.layers[layer][id].parent.unwrap());
             } else {
                 let new_parent_id = self.layers[layer + 1].len();
