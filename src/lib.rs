@@ -367,6 +367,9 @@ impl<F: Float + Debug + Default> VPTree<F> {
                         id: child.id,
                         distance,
                     });
+                    if layer > 0 {
+                        self.layers[layer-1][child.id].parent = Some(new_id);
+                    }
                     self.layers[layer][id].children.swap_remove(i);
                 } else {
                     i += 1;
