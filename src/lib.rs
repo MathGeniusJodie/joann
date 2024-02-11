@@ -317,6 +317,9 @@ impl<F: Float + Debug + Default> VPTree<F> {
         }
     }
     pub fn insert(&mut self, q: &[F], swid: Swid) {
+        if q.len() != self.dimensions {
+            panic!("Dimensions do not match");
+        }
         let id = self.swid_layer.len();
         self.swid_layer.push(swid);
         self.vector_layer.extend_from_slice(q);
