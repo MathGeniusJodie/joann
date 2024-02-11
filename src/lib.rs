@@ -476,21 +476,22 @@ impl<F: Float + Debug + Default> VPTree<F> {
             id = self.layers[layer][id].parent.unwrap();
             layer += 1;
         }
-        self.recursively_get_all_children(layer, id)
+        self.get_all_children(layer, id)
     }
-    fn recursively_get_all_children(&self, layer: usize, id: NodeID) -> Vec<NodeID> {
-        let mut result = self.layers[layer][id]
-            .children
-            .iter()
-            .map(|n| n.id)
-            .collect::<Vec<NodeID>>();
-        if layer == 0 {
-            return result;
+
+    fn get_all_children(&self, layer: usize, id: NodeID) -> Vec<NodeID> {
+        let mut result = Vec::new();
+        let mut stack = vec![(layer, id)];
+
+        while let Some((layer, id)) = stack.pop() {
+            let children = &self.layers[layer][id].children;
+            if layer == 0 {
+                result.extend(children.iter().map(|child| child.id));
+                continue;
+            } else {
+                stack.extend(children.iter().map(|child| (layer - 1, child.id)));
+            }
         }
-        result = result
-            .iter()
-            .flat_map(|id| self.recursively_get_all_children(layer - 1, *id))
-            .collect();
         result
     }
     pub fn remove(&mut self, swid_to_remove: Swid) {
