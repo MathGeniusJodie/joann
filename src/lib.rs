@@ -7,7 +7,7 @@ type NodeID = usize;
 const MAX_LAYER: usize = 16;
 
 #[derive(Copy, Clone, Debug, Default)]
-struct Neighbor<F: Float + Debug + Default> {
+pub struct Neighbor<F: Float + Debug + Default> {
     id: NodeID,
     distance: F,
 }
@@ -286,6 +286,211 @@ impl<F: Float + Debug + Default> HNSW<F> {
     }
 }
 
+pub struct VPTree<F: Float + Debug + Default> {
+    pub layers: [Vec<VPNode<F>>; MAX_LAYER],
+    pub dimensions: usize,
+    pub swid_layer: Vec<Swid>,
+    pub vector_layer: Vec<F>,
+    pub graveyard_layer: BitVec,
+    ef_construction: usize,
+    space: Distance,
+    m: usize,
+}
+
+#[derive(Debug)]
+pub struct VPNode<F: Float + Debug + Default> {
+    pub children: Vec<Neighbor<F>>,
+    pub parent: Option<NodeID>,
+    pub center: NodeID,
+}
+
+impl<F: Float + Debug + Default> VPTree<F> {
+    pub fn new(ef_construction: usize, space: Distance, dimensions: usize, m: usize) -> VPTree<F> {
+        let layers: [Vec<VPNode<F>>; MAX_LAYER] = Default::default();
+        VPTree {
+            layers,
+            dimensions,
+            swid_layer: Vec::new(),
+            vector_layer: Vec::new(),
+            graveyard_layer: BitVec::new(),
+            ef_construction,
+            space,
+            m,
+        }
+    }
+    pub fn insert(&mut self, q: &[F], swid: Swid) {
+        let id = self.swid_layer.len();
+        self.swid_layer.push(swid);
+        self.vector_layer.extend_from_slice(q);
+        match self.find_closest_node(q) {
+            Some(closest) => {
+                let distance = get_distance(
+                    self.get_vector(0, self.layers[0][closest].center),
+                    q,
+                    self.space,
+                );
+                self.layers[0][closest]
+                    .children
+                    .push(Neighbor { id, distance });
+                self.recursive_split(0, closest);
+            }
+            None => {
+                self.layers[0].push(VPNode {
+                    children: Vec::with_capacity(self.m + 1),
+                    parent: None,
+                    center: id,
+                });
+            }
+        }
+    }
+    fn recursive_split(&mut self, layer: usize, id: NodeID) {
+        if self.layers[layer][id].children.len() > self.m {
+            let new_id = self.layers[layer].len();
+            let center = pop_max(&mut self.layers[layer][id].children).id;
+            let new_node = VPNode {
+                children: Vec::with_capacity(self.m + 1),
+                parent: self.layers[layer][id].parent,
+                center,
+            };
+            self.layers[layer].push(new_node);
+            for i in 0..self.layers[layer][id].children.len() {
+                if self.layers[layer][id].children.get(i).is_none() {
+                    continue;
+                }
+                let child = self.layers[layer][id].children[i];
+                let distance = get_distance(
+                    self.get_vector(layer, center),
+                    self.get_vector(layer, child.id),
+                    self.space,
+                );
+                if distance < child.distance {
+                    self.layers[layer][new_id].children.push(Neighbor {
+                        id: child.id,
+                        distance,
+                    });
+                    self.layers[layer][id].children.swap_remove(i);
+                }
+            }
+            if self.layers[layer][id].parent.is_some() {
+                self.recursive_split(layer + 1, self.layers[layer][id].parent.unwrap());
+            } else {
+                let new_parent_id = self.layers[layer + 1].len();
+                self.layers[layer + 1].push(VPNode {
+                    children: Vec::with_capacity(self.m + 1),
+                    parent: None,
+                    center: id,
+                });
+                let distance = get_distance(
+                    self.get_vector(layer, id),
+                    self.get_vector(layer, new_id),
+                    self.space,
+                );
+                self.layers[layer + 1][new_parent_id]
+                    .children
+                    .push(Neighbor {
+                        id: new_id,
+                        distance,
+                    });
+                self.layers[layer][id].parent = Some(new_parent_id);
+                self.layers[layer][new_id].parent = Some(new_parent_id);
+            }
+        }
+    }
+    fn find_closest_node(&self, q: &[F]) -> Option<NodeID> {
+        if self.layers[0].is_empty() {
+            return None;
+        }
+        let mut layer = MAX_LAYER - 1;
+        while self.layers[layer].is_empty() {
+            layer -= 1;
+        }
+        let mut id = self.layers[layer]
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                get_distance(self.get_vector(layer, a.center), q, self.space)
+                    .partial_cmp(&get_distance(
+                        self.get_vector(layer, b.center),
+                        q,
+                        self.space,
+                    ))
+                    .unwrap()
+            })
+            .unwrap()
+            .0;
+        loop {
+            if layer == 0 {
+                return Some(id);
+            }
+            id = self.layers[layer][id]
+                .children
+                .iter()
+                .min_by(|a, b| {
+                    get_distance(self.get_vector(layer, a.id), q, self.space)
+                        .partial_cmp(&get_distance(self.get_vector(layer, b.id), q, self.space))
+                        .unwrap()
+                })
+                .unwrap()
+                .id;
+            layer -= 1;
+        }
+    }
+    fn get_vector(&self, layer: usize, id: NodeID) -> &[F] {
+        if layer == 0 {
+            self.vector_layer.chunks(self.dimensions).nth(id).unwrap()
+        } else {
+            self.get_vector(layer - 1, self.layers[layer - 1][id].center)
+        }
+    }
+    pub fn knn(&self, q: &[F], k: usize) -> Vec<(Swid, F)> {
+        let closest = self.find_closest_node(q).unwrap();
+        let ef = self.ef_construction.max(k);
+        // go up layers until ef is reached
+        let mut layer = 0;
+        let mut id = closest;
+        let mut n = self.m;
+        loop{
+            if n > ef || self.layers[layer][id].parent.is_none() {
+                break;
+            }
+            n *= self.m;
+            id = self.layers[layer][id].parent.unwrap();
+            layer += 1;
+        }
+        // todo: filter out graveyard nodes
+        let mut result: Vec<(Swid, F)> = self.recursively_get_all_children(layer, id).iter().map(|id| {
+            let distance = get_distance(self.get_vector(0, *id), q, self.space);
+            (self.swid_layer[*id], distance)
+        }).collect();
+        result.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        result.truncate(k);
+        result
+    }
+    fn recursively_get_all_children(&self, layer: usize, id: NodeID) -> Vec<NodeID> {
+        let mut result = Vec::new();
+        self.layers[layer][id].children.iter().for_each(|n| {
+            result.push(n.id);
+        });
+        result.push(self.layers[layer][id].center);
+        if layer == 0 {
+            return result;
+        }
+        result = result.iter().flat_map(|id| self.recursively_get_all_children(layer-1, *id)).collect();
+        result
+    }
+    pub fn remove(&mut self, swid_to_remove: Swid) {
+        let id = self
+            .swid_layer
+            .iter()
+            .position(|swid| *swid == swid_to_remove)
+            .unwrap();
+        self.layers[0].iter_mut().for_each(|node| {
+            node.children.retain(|n| n.id != id);
+        });
+        self.graveyard_layer.set(id, true);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,13 +518,36 @@ mod tests {
             ]
         );
     }
+    #[test]
+    fn test_vp_tree() {
+        let mut vptree = VPTree::<f64>::new(16, Distance::Euclidean, 2, 16);
+        vptree.insert(&[3.0, 3.0], 3);
+        vptree.insert(&[4.0, 4.0], 4);
+        vptree.insert(&[5.0, 5.0], 5);
+        vptree.insert(&[6.0, 6.0], 6);
+        vptree.insert(&[7.0, 7.0], 7);
+        vptree.insert(&[8.0, 8.0], 8);
+        vptree.insert(&[9.0, 9.0], 9);
+        vptree.insert(&[0.0, 0.0], 420);
+        vptree.insert(&[1.0, 1.0], 69);
+        vptree.insert(&[2.0, 2.0], 42);
+        //dbg!(&vptree);
+        assert_eq!(
+            vptree.knn(&[0.0, 0.0], 3),
+            vec![
+                (420, 0.0),
+                (69, std::f64::consts::SQRT_2),
+                (42, 2.0 * std::f64::consts::SQRT_2)
+            ]
+        );
+    }
 
     #[test]
     fn test_insert_10000() {
         use microbench::*;
         let mut hnsw = HNSW::<f64>::new(16, Distance::Euclidean, 2, 16);
         let bench_options = Options::default();
-        microbench::bench(&bench_options, "test_insert_10000", || {
+        microbench::bench(&bench_options, "hnsw_test_insert_10000", || {
             for i in 0..10000 {
                 hnsw.insert(&[i as f64, i as f64], i);
             }
@@ -328,9 +556,25 @@ mod tests {
         for i in 0..10000 {
             hnsw.insert(&[i as f64, i as f64], i);
         }
-        microbench::bench(&bench_options, "test_knn_10000", || {
+        microbench::bench(&bench_options, "hnsw_test_knn_10000", || {
             for i in 0..10000 {
                 hnsw.knn(&[i as f64, i as f64], 3);
+            }
+        });
+        let mut vptree = VPTree::<f64>::new(16, Distance::Euclidean, 2, 16);
+        let bench_options = Options::default();
+        microbench::bench(&bench_options, "vp_tree_test_insert_10000", || {
+            for i in 0..10000 {
+                vptree.insert(&[i as f64, i as f64], i);
+            }
+            vptree = VPTree::<f64>::new(16, Distance::Euclidean, 2, 16);
+        });
+        for i in 0..10000 {
+            vptree.insert(&[i as f64, i as f64], i);
+        }
+        microbench::bench(&bench_options, "vp_tree_test_knn_10000", || {
+            for i in 0..10000 {
+                vptree.knn(&[i as f64, i as f64], 3);
             }
         });
     }
