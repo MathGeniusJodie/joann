@@ -355,7 +355,7 @@ impl<F: Float + Debug + Default> VPTree<F> {
             };
             self.layers[layer].push(new_node);
             let mut i = 0;
-            while i<self.layers[layer][id].children.len() {
+            while i < self.layers[layer][id].children.len() {
                 let child = self.layers[layer][id].children[i];
                 let distance = get_distance(
                     self.get_vector(layer, center),
@@ -369,19 +369,19 @@ impl<F: Float + Debug + Default> VPTree<F> {
                     });
                     self.layers[layer][id].children.swap_remove(i);
                 } else {
-                    i+=1;
+                    i += 1;
                 }
             }
             if self.layers[layer][id].parent.is_some() {
                 // todo: double check this
                 let parent_id = self.layers[layer][id].parent.unwrap();
-                let parent_center = self.layers[layer+1][parent_id].center;
+                let parent_center = self.layers[layer + 1][parent_id].center;
                 let distance = get_distance(
                     self.get_vector(layer, center),
-                    self.get_vector(layer+1, parent_center),
+                    self.get_vector(layer + 1, parent_center),
                     self.space,
                 );
-                self.layers[layer+1][parent_id].children.push(Neighbor {
+                self.layers[layer + 1][parent_id].children.push(Neighbor {
                     id: new_id,
                     distance,
                 });
@@ -478,7 +478,7 @@ impl<F: Float + Debug + Default> VPTree<F> {
         res
     }
     fn knn_ids(&self, q: &[F], k: usize) -> Vec<NodeID> {
-        let closest = match self.find_closest_node(q){
+        let closest = match self.find_closest_node(q) {
             Some(closest) => closest,
             None => return Vec::new(),
         };
