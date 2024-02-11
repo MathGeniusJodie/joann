@@ -405,8 +405,12 @@ impl<F: Float + Debug + Default> VPTree<F> {
             return None;
         }
         let mut layer = MAX_LAYER - 1;
-        while self.layers[layer].is_empty() {
-            layer -= 1;
+        loop {
+            if self.layers[layer].is_empty() {
+                layer -= 1;
+            } else {
+                break;
+            }
         }
         let mut id = self.layers[layer]
             .iter()
