@@ -527,7 +527,6 @@ impl<F: Float + Debug + Default> VPTree<F> {
             let children = &self.layers[id].children;
             if self.layers[id].is_leaf {
                 result.extend(children.iter().map(|child| child.id));
-                continue;
             } else {
                 stack.extend(children.iter().map(|child| child.id));
             }
