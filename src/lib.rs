@@ -1,6 +1,6 @@
 use bit_vec::BitVec;
 use num_traits::Float;
-use std::{collections::HashMap, fmt::Debug};
+use std::fmt::Debug;
 
 type Swid = u128;
 type NodeID = usize;
