@@ -1,6 +1,6 @@
 use bit_vec::BitVec;
 use num_traits::Float;
-use std::fmt::Debug;
+use std::{collections::HashMap, fmt::Debug};
 
 type Swid = u128;
 type NodeID = usize;
@@ -361,9 +361,14 @@ impl<F: Float + Debug + Default> VPTree<F> {
             let center = self.layers[id].children.iter().max().unwrap();
             let center_id = center.id;
             let center_vector = (match self.layers[id].is_leaf {
-                true => self.vector_layer.chunks(self.dimensions).nth(center_id).unwrap(),
+                true => self
+                    .vector_layer
+                    .chunks(self.dimensions)
+                    .nth(center_id)
+                    .unwrap(),
                 false => self.get_vector(center_id),
-            }).to_vec(); // todo: clone to get around lifetime issues
+            })
+            .to_vec(); // todo: clone to get around lifetime issues
             let new_node = VPNode {
                 children: Vec::with_capacity(self.m + 1),
                 parent: self.layers[id].parent,
@@ -385,11 +390,7 @@ impl<F: Float + Debug + Default> VPTree<F> {
                             .unwrap(),
                         self.space,
                     ),
-                    false => get_distance(
-                        &center_vector,
-                        self.get_vector(child.id),
-                        self.space,
-                    ),
+                    false => get_distance(&center_vector, self.get_vector(child.id), self.space),
                 };
 
                 if distance < child.distance
@@ -412,11 +413,8 @@ impl<F: Float + Debug + Default> VPTree<F> {
                 // todo: double check this
                 let parent_id = self.layers[id].parent.unwrap();
                 let parent_center = self.layers[parent_id].center;
-                let distance = get_distance(
-                    &center_vector,
-                    self.get_vector(parent_center),
-                    self.space,
-                );
+                let distance =
+                    get_distance(&center_vector, self.get_vector(parent_center), self.space);
                 self.layers[parent_id].children.push(Neighbor {
                     id: new_id,
                     distance,
@@ -462,14 +460,15 @@ impl<F: Float + Debug + Default> VPTree<F> {
             id = self.layers[id]
                 .children
                 .iter()
-                .min_by(|a, b| {
-                    let a = self.get_vector(a.id);
-                    let b = self.get_vector(b.id);
-                    get_distance(a, q, self.space)
-                        .partial_cmp(&get_distance(b, q, self.space))
-                        .unwrap()
+                .map(|n| Neighbor {
+                    id: n.id,
+                    distance: get_distance(self.get_vector(n.id), q, self.space),
                 })
-                .unwrap_or(&Neighbor{id:center, distance: F::zero()})
+                .min()
+                .unwrap_or(Neighbor {
+                    id: center,
+                    distance: F::zero(),
+                })
                 .id;
         }
     }
