@@ -458,6 +458,7 @@ impl<F: Float + Debug + Default> VPTree<F> {
             if self.layers[id].is_leaf {
                 return Some(id);
             }
+            let center = self.layers[id].center;
             id = self.layers[id]
                 .children
                 .iter()
@@ -468,17 +469,17 @@ impl<F: Float + Debug + Default> VPTree<F> {
                         .partial_cmp(&get_distance(b, q, self.space))
                         .unwrap()
                 })
-                .unwrap()
+                .unwrap_or(&Neighbor{id:center, distance: F::zero()})
                 .id;
         }
     }
     fn get_vector(&self, mut id: NodeID) -> &[F] {
         let mut leaf = self.layers[id].is_leaf;
         loop {
+            id = self.layers[id].center;
             if leaf {
                 return self.vector_layer.chunks(self.dimensions).nth(id).unwrap();
             }
-            id = self.layers[id].center;
             leaf = self.layers[id].is_leaf;
         }
     }
