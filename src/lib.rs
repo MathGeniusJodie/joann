@@ -287,13 +287,14 @@ impl<F: Float + Debug + Default> HNSW<F> {
 }
 
 pub struct VPTree<F: Float + Debug + Default> {
-    pub layers: [Vec<VPNode<F>>; MAX_LAYER],
+    pub layers: Vec<VPNode<F>>,
     pub dimensions: usize,
     pub swid_layer: Vec<Swid>,
     pub vector_layer: Vec<F>,
     ef_construction: usize,
     space: Distance,
     m: usize,
+    top_node: Option<NodeID>,
 }
 
 #[derive(Debug)]
@@ -301,103 +302,129 @@ pub struct VPNode<F: Float + Debug + Default> {
     pub children: Vec<Neighbor<F>>,
     pub parent: Option<NodeID>,
     pub center: NodeID,
+    pub is_leaf: bool,
 }
 
 impl<F: Float + Debug + Default> VPTree<F> {
     pub fn new(ef_construction: usize, space: Distance, dimensions: usize, m: usize) -> VPTree<F> {
-        let layers: [Vec<VPNode<F>>; MAX_LAYER] = Default::default();
         VPTree {
-            layers,
+            layers: Vec::new(),
             dimensions,
             swid_layer: Vec::new(),
             vector_layer: Vec::new(),
             ef_construction,
             space,
             m,
+            top_node: None,
         }
     }
     pub fn insert(&mut self, q: &[F], swid: Swid) {
         if q.len() != self.dimensions {
             panic!("Dimensions do not match");
         }
-        let id = self.swid_layer.len();
+        let bottom_id = self.swid_layer.len();
         self.swid_layer.push(swid);
         self.vector_layer.extend_from_slice(q);
-        match self.find_closest_node(q) {
+        match self.find_closest_leaf(q) {
             Some(closest) => {
                 let distance = get_distance(
-                    self.get_vector(0, self.layers[0][closest].center),
+                    self.vector_layer
+                        .chunks(self.dimensions)
+                        .nth(self.layers[closest].center)
+                        .unwrap(),
                     q,
                     self.space,
                 );
-                self.layers[0][closest]
-                    .children
-                    .push(Neighbor { id, distance });
-                self.recursive_split(0, closest);
+                self.layers[closest].children.push(Neighbor {
+                    id: bottom_id,
+                    distance,
+                });
+                self.recursive_split(closest);
             }
             None => {
-                self.layers[0].push(VPNode {
+                self.layers.push(VPNode {
                     children: vec![Neighbor {
-                        id,
+                        id: bottom_id,
                         distance: F::zero(),
                     }],
                     parent: None,
-                    center: id,
+                    center: bottom_id,
+                    is_leaf: true,
                 });
+                self.top_node = Some(0);
             }
         }
     }
-    fn recursive_split(&mut self, layer: usize, id: NodeID) {
-        if self.layers[layer][id].children.len() > self.m {
-            let new_id = self.layers[layer].len();
-            let center = self.layers[layer][id].children.iter().max().unwrap();
+    fn recursive_split(&mut self, id: NodeID) {
+        if self.layers[id].children.len() > self.m {
+            let new_id = self.layers.len();
+            let center = self.layers[id].children.iter().max().unwrap();
             let center_id = center.id;
+            let center_vector = (match self.layers[id].is_leaf {
+                true => self.vector_layer.chunks(self.dimensions).nth(center_id).unwrap(),
+                false => self.get_vector(center_id),
+            }).to_vec(); // todo: clone to get around lifetime issues
             let new_node = VPNode {
                 children: Vec::with_capacity(self.m + 1),
-                parent: self.layers[layer][id].parent,
+                parent: self.layers[id].parent,
                 center: center_id,
+                is_leaf: self.layers[id].is_leaf,
             };
-            self.layers[layer].push(new_node);
+            self.layers.push(new_node);
+
             let mut i = 0;
- 
-            while i < self.layers[layer][id].children.len() {
-                let child = self.layers[layer][id].children[i];
-                let distance = get_distance(
-                    self.get_vector(layer, center_id),
-                    self.get_vector(layer, child.id),
-                    self.space,
-                );
-                if distance < child.distance || (distance == child.distance && self.layers[layer][id].children.len()>self.m/2) {
-                    self.layers[layer][new_id].children.push(Neighbor {
+
+            while i < self.layers[id].children.len() {
+                let child = self.layers[id].children[i];
+                let distance = match self.layers[id].is_leaf {
+                    true => get_distance(
+                        &center_vector,
+                        self.vector_layer
+                            .chunks(self.dimensions)
+                            .nth(child.id)
+                            .unwrap(),
+                        self.space,
+                    ),
+                    false => get_distance(
+                        &center_vector,
+                        self.get_vector(child.id),
+                        self.space,
+                    ),
+                };
+
+                if distance < child.distance
+                    || (distance == child.distance && self.layers[id].children.len() > self.m / 2)
+                {
+                    self.layers[new_id].children.push(Neighbor {
                         id: child.id,
                         distance,
                     });
-                    if layer > 0 {
-                        self.layers[layer - 1][child.id].parent = Some(new_id);
+                    if !self.layers[new_id].is_leaf {
+                        self.layers[child.id].parent = Some(new_id);
                     }
-                    self.layers[layer][id].children.swap_remove(i);
+                    self.layers[id].children.swap_remove(i);
                 } else {
                     i += 1;
                 }
             }
-            
-            if self.layers[layer][id].parent.is_some() {
+
+            if self.layers[id].parent.is_some() {
                 // todo: double check this
-                let parent_id = self.layers[layer][id].parent.unwrap();
-                let parent_center = self.layers[layer + 1][parent_id].center;
+                let parent_id = self.layers[id].parent.unwrap();
+                let parent_center = self.layers[parent_id].center;
                 let distance = get_distance(
-                    self.get_vector(layer, center_id),
-                    self.get_vector(layer + 1, parent_center),
+                    &center_vector,
+                    self.get_vector(parent_center),
                     self.space,
                 );
-                self.layers[layer + 1][parent_id].children.push(Neighbor {
+                self.layers[parent_id].children.push(Neighbor {
                     id: new_id,
                     distance,
                 });
-                self.recursive_split(layer + 1, self.layers[layer][id].parent.unwrap());
+                self.recursive_split(self.layers[id].parent.unwrap());
             } else {
-                let new_parent_id = self.layers[layer + 1].len();
-                self.layers[layer + 1].push(VPNode {
+                let new_parent_id = self.layers.len();
+                self.layers.push(VPNode {
                     children: vec![
                         Neighbor {
                             id,
@@ -406,68 +433,53 @@ impl<F: Float + Debug + Default> VPTree<F> {
                         Neighbor {
                             id: new_id,
                             distance: get_distance(
-                                self.get_vector(layer, id),
-                                self.get_vector(layer, new_id),
+                                self.get_vector(id),
+                                self.get_vector(new_id),
                                 self.space,
                             ),
                         },
                     ],
                     parent: None,
                     center: id,
+                    is_leaf: false,
                 });
-                self.layers[layer][id].parent = Some(new_parent_id);
-                self.layers[layer][new_id].parent = Some(new_parent_id);
+                self.top_node = Some(new_parent_id);
+                self.layers[id].parent = Some(new_parent_id);
+                self.layers[new_id].parent = Some(new_parent_id);
             }
         }
     }
-    fn find_closest_node(&self, q: &[F]) -> Option<NodeID> {
-        if self.layers[0].is_empty() {
+    fn find_closest_leaf(&self, q: &[F]) -> Option<NodeID> {
+        if self.layers.is_empty() {
             return None;
         }
-        let mut layer = MAX_LAYER - 1;
+        let mut id = self.top_node.unwrap();
         loop {
-            if self.layers[layer].is_empty() {
-                layer -= 1;
-            } else {
-                break;
-            }
-        }
-        let mut id = self.layers[layer]
-            .iter()
-            .enumerate()
-            .min_by(|(_, a), (_, b)| {
-                get_distance(self.get_vector(layer, a.center), q, self.space)
-                    .partial_cmp(&get_distance(
-                        self.get_vector(layer, b.center),
-                        q,
-                        self.space,
-                    ))
-                    .unwrap()
-            })
-            .unwrap()
-            .0;
-        loop {
-            if layer == 0 {
+            if self.layers[id].is_leaf {
                 return Some(id);
             }
-            id = self.layers[layer][id]
+            id = self.layers[id]
                 .children
                 .iter()
                 .min_by(|a, b| {
-                    get_distance(self.get_vector(layer, a.id), q, self.space)
-                        .partial_cmp(&get_distance(self.get_vector(layer, b.id), q, self.space))
+                    let a = self.get_vector(a.id);
+                    let b = self.get_vector(b.id);
+                    get_distance(a, q, self.space)
+                        .partial_cmp(&get_distance(b, q, self.space))
                         .unwrap()
                 })
                 .unwrap()
                 .id;
-            layer -= 1;
         }
     }
-    fn get_vector(&self, layer: usize, id: NodeID) -> &[F] {
-        if layer == 0 {
-            self.vector_layer.chunks(self.dimensions).nth(id).unwrap()
-        } else {
-            self.get_vector(layer - 1, self.layers[layer - 1][id].center)
+    fn get_vector(&self, mut id: NodeID) -> &[F] {
+        let mut leaf = self.layers[id].is_leaf;
+        loop {
+            if leaf {
+                return self.vector_layer.chunks(self.dimensions).nth(id).unwrap();
+            }
+            id = self.layers[id].center;
+            leaf = self.layers[id].is_leaf;
         }
     }
     pub fn knn(&self, q: &[F], k: usize) -> Vec<(Swid, F)> {
@@ -477,7 +489,11 @@ impl<F: Float + Debug + Default> VPTree<F> {
             .map(|id| {
                 (
                     self.swid_layer[*id],
-                    get_distance(self.get_vector(0, *id), q, self.space),
+                    get_distance(
+                        self.vector_layer.chunks(self.dimensions).nth(*id).unwrap(),
+                        q,
+                        self.space,
+                    ),
                 )
             })
             .collect();
@@ -486,37 +502,34 @@ impl<F: Float + Debug + Default> VPTree<F> {
         res
     }
     fn knn_ids(&self, q: &[F], k: usize) -> Vec<NodeID> {
-        let closest = match self.find_closest_node(q) {
+        let closest = match self.find_closest_leaf(q) {
             Some(closest) => closest,
             None => return Vec::new(),
         };
         let ef = self.ef_construction.max(k);
-        // go up layers until ef is reached
-        let mut layer = 0;
         let mut id = closest;
         let mut n = self.m;
         loop {
-            if n > ef || self.layers[layer][id].parent.is_none() {
+            if n > ef || self.layers[id].parent.is_none() {
                 break;
             }
             n *= self.m;
-            id = self.layers[layer][id].parent.unwrap();
-            layer += 1;
+            id = self.layers[id].parent.unwrap();
         }
-        self.get_all_children(layer, id)
+        self.get_all_children(id, n)
     }
 
-    fn get_all_children(&self, layer: usize, id: NodeID) -> Vec<NodeID> {
-        let mut result = Vec::new();
-        let mut stack = vec![(layer, id)];
+    fn get_all_children(&self, id: NodeID, n: usize) -> Vec<NodeID> {
+        let mut result = Vec::with_capacity(n);
+        let mut stack = vec![id];
 
-        while let Some((layer, id)) = stack.pop() {
-            let children = &self.layers[layer][id].children;
-            if layer == 0 {
+        while let Some(id) = stack.pop() {
+            let children = &self.layers[id].children;
+            if self.layers[id].is_leaf {
                 result.extend(children.iter().map(|child| child.id));
                 continue;
             } else {
-                stack.extend(children.iter().map(|child| (layer - 1, child.id)));
+                stack.extend(children.iter().map(|child| child.id));
             }
         }
         result
@@ -527,7 +540,7 @@ impl<F: Float + Debug + Default> VPTree<F> {
             .iter()
             .position(|swid| *swid == swid_to_remove)
             .unwrap();
-        self.layers[0].iter_mut().for_each(|node| {
+        self.layers.iter_mut().for_each(|node| {
             node.children.retain(|n| n.id != id);
         });
     }
