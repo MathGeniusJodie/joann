@@ -364,23 +364,23 @@ impl<F: Float + Debug + Default> VPTree<F> {
                     non_leaf_nodes.push(index);
                 }
             });
-        //ensure nothing ever refers to a childless node
-        loop {
-            non_leaf_nodes.iter().for_each(|index| {
-                self.layers[*index]
-                    .children
-                    .retain(|n| !childless_nodes.contains(&n.id));
-            });
-            childless_nodes.clear();
-            non_leaf_nodes.iter().for_each(|index| {
-                if self.layers[*index].children.is_empty() {
-                    childless_nodes.push(*index);
-                }
-            });
-            if childless_nodes.is_empty() {
-                break;
+        //clean up childless nodes a bit
+        non_leaf_nodes.iter().for_each(|index| {
+            self.layers[*index]
+                .children
+                .retain(|n| !childless_nodes.contains(&n.id));
+        });
+        childless_nodes.clear();
+        non_leaf_nodes.iter().for_each(|index| {
+            if self.layers[*index].children.is_empty() {
+                childless_nodes.push(*index);
             }
-        }
+        });
+        non_leaf_nodes.iter().for_each(|index| {
+            self.layers[*index]
+                .children
+                .retain(|n| !childless_nodes.contains(&n.id));
+        });
         //remove the node from the swid_layer and vector_layer
         let last = self.swid_layer.len() - 1;
         self.swid_layer.swap(id, last);
