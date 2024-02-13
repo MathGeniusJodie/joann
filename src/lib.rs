@@ -1,54 +1,13 @@
-use bit_vec::BitVec;
 use num_traits::Float;
 use std::fmt::Debug;
 
 type Swid = u128;
 type NodeID = usize;
-const MAX_LAYER: usize = 16;
 
 #[derive(Copy, Clone, Debug, Default)]
 pub struct Neighbor<F: Float + Debug + Default> {
     id: NodeID,
     distance: F,
-}
-impl<F: Float + Debug + Default> PartialEq for Neighbor<F> {
-    fn eq(&self, other: &Self) -> bool {
-        self.distance == other.distance && self.id == other.id
-    }
-}
-impl<F: Float + Debug + Default> Eq for Neighbor<F> {}
-impl<F: Float + Debug + Default> PartialOrd for Neighbor<F> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-impl<F: Float + Debug + Default> Ord for Neighbor<F> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        if self.distance == other.distance {
-            return self.id.cmp(&other.id);
-        }
-        match self.distance.partial_cmp(&other.distance) {
-            Some(ord) => ord,
-            None => std::cmp::Ordering::Equal,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct HNSW<F: Float + Debug + Default> {
-    pub layers: [Vec<Node<F>>; MAX_LAYER],
-    pub dimensions: usize,
-    pub swid_layer: Vec<Swid>,
-    pub vector_layer: Vec<F>,
-    ef_construction: usize,
-    space: Distance,
-    m: usize,
-}
-
-#[derive(Debug)]
-pub struct Node<F: Float + Debug + Default> {
-    neighbors: Vec<Neighbor<F>>,
-    lower_id: NodeID,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,24 +17,7 @@ pub enum Distance {
     L2,
     IP,
 }
-fn pop_min<T: Ord>(v: &mut Vec<T>) -> T {
-    let min_index = v
-        .iter()
-        .enumerate()
-        .min_by(|(_, a), (_, b)| a.cmp(b))
-        .unwrap()
-        .0;
-    v.swap_remove(min_index)
-}
-fn pop_max<T: Ord>(v: &mut Vec<T>) -> T {
-    let max_index = v
-        .iter()
-        .enumerate()
-        .max_by(|(_, a), (_, b)| a.cmp(b))
-        .unwrap()
-        .0;
-    v.swap_remove(max_index)
-}
+
 #[inline(never)]
 fn get_distance<F: Float + Debug + Default>(a: &[F], b: &[F], space: Distance) -> F {
     match space {
@@ -125,167 +67,6 @@ fn get_distance<F: Float + Debug + Default>(a: &[F], b: &[F], space: Distance) -
     }
 }
 
-impl<F: Float + Debug + Default> HNSW<F> {
-    pub fn new(ef_construction: usize, space: Distance, dimensions: usize, m: usize) -> HNSW<F> {
-        let layers: [Vec<Node<F>>; MAX_LAYER] = Default::default();
-        HNSW {
-            layers,
-            dimensions,
-            swid_layer: Vec::new(),
-            vector_layer: Vec::new(),
-            ef_construction,
-            space,
-            m,
-        }
-    }
-    pub fn insert(&mut self, q: &[F], swid: Swid) {
-        let l =
-            ((-rand::random::<f64>().ln() * (1.0f64 / 16.0f64.ln())) as usize).min(MAX_LAYER - 1);
-        let mut ep = 0;
-        for lc in (l + 1..MAX_LAYER).rev() {
-            ep = match self.search_layer(q, ep, 1, lc).first() {
-                Some(n) => self.layers[lc][n.id].lower_id,
-                None => 0,
-            };
-        }
-
-        for lc in (0..=l).rev() {
-            let mut n = self.search_layer(q, ep, self.ef_construction, lc);
-            n.truncate(self.m);
-            let qid = self.layers[lc].len();
-            for neighbor in &n {
-                self.layers[lc][neighbor.id].neighbors.push(Neighbor {
-                    id: qid,
-                    distance: neighbor.distance,
-                });
-                self.layers[lc][neighbor.id].neighbors.sort();
-                self.layers[lc][neighbor.id].neighbors.truncate(self.m);
-            }
-            let lower_id = if lc == 0 {
-                self.swid_layer.len()
-            } else {
-                self.layers[lc - 1].len()
-            };
-            ep = match n.first() {
-                Some(n) => self.layers[lc][n.id].lower_id,
-                None => 0,
-            };
-            self.layers[lc].push(Node {
-                neighbors: n,
-                lower_id,
-            });
-        }
-        self.swid_layer.push(swid);
-        self.vector_layer.extend_from_slice(q);
-    }
-    pub fn remove(&mut self, swid_to_remove: Swid) {
-        let mut new_hnsw: HNSW<F> =
-            HNSW::new(self.ef_construction, self.space, self.dimensions, self.m);
-        self.swid_layer
-            .iter()
-            .zip(self.vector_layer.chunks(self.dimensions))
-            .for_each(|(swid, vector)| {
-                if *swid != swid_to_remove {
-                    new_hnsw.insert(vector, *swid);
-                }
-            });
-        self.layers = new_hnsw.layers;
-        self.swid_layer = new_hnsw.swid_layer;
-        self.vector_layer = new_hnsw.vector_layer;
-    }
-    fn search_layer(&self, q: &[F], ep: usize, ef: usize, layer: usize) -> Vec<Neighbor<F>> {
-        if ef > self.layers[layer].len() {
-            let len = self.layers[layer].len();
-            let mut result = Vec::with_capacity(len);
-            for i in 0..len {
-                result.push(Neighbor {
-                    id: i,
-                    distance: get_distance(self.get_vector(layer, i), q, self.space),
-                });
-            }
-            result.sort();
-            return result;
-        }
-        let ep_dist = get_distance(self.get_vector(layer, ep), q, self.space);
-        let mut visited = BitVec::from_elem(self.layers[layer].len(), false);
-        let mut candidates = Vec::with_capacity(self.m);
-        let mut result = Vec::with_capacity(ef);
-        visited.set(ep, true);
-        candidates.push(Neighbor {
-            id: ep,
-            distance: ep_dist,
-        });
-        result.push(Neighbor {
-            id: ep,
-            distance: ep_dist,
-        });
-        let mut max_dist = ep_dist;
-        while !candidates.is_empty() {
-            let c = pop_min(&mut candidates);
-            if c.distance > max_dist {
-                break;
-            }
-            for e in &self.layers[layer][c.id].neighbors {
-                if visited.get(e.id).unwrap() {
-                    continue;
-                }
-                visited.set(e.id, true);
-                let d_e = get_distance(self.get_vector(layer, e.id), q, self.space);
-                if d_e < max_dist || result.len() < ef {
-                    result.push(Neighbor {
-                        id: e.id,
-                        distance: d_e,
-                    });
-                    max_dist = max_dist.max(d_e);
-                    candidates.push(Neighbor {
-                        id: e.id,
-                        distance: d_e,
-                    });
-                    if result.len() > ef {
-                        max_dist = pop_max(&mut result).distance;
-                    }
-                }
-            }
-        }
-        result.sort();
-        result
-    }
-    fn get_swid(&self, layer: usize, id: NodeID) -> Swid {
-        let lower = self.layers[layer][id].lower_id;
-        if layer == 0 {
-            self.swid_layer[lower]
-        } else {
-            self.get_swid(layer - 1, lower)
-        }
-    }
-    fn get_vector(&self, layer: usize, id: NodeID) -> &[F] {
-        let lower = self.layers[layer][id].lower_id;
-        if layer == 0 {
-            self.vector_layer
-                .chunks(self.dimensions)
-                .nth(lower)
-                .unwrap()
-        } else {
-            self.get_vector(layer - 1, lower)
-        }
-    }
-    pub fn knn(&self, q: &[F], k: usize) -> Vec<(Swid, F)> {
-        let ef_search = self.ef_construction.max(k);
-        let mut ep = 0;
-        for lc in (1..MAX_LAYER).rev() {
-            ep = match self.search_layer(q, ep, 1, lc).first() {
-                Some(n) => self.layers[lc][n.id].lower_id,
-                None => 0,
-            };
-        }
-        self.search_layer(q, ep, ef_search, 0)
-            .iter()
-            .take(k)
-            .map(|n| (self.get_swid(0, n.id), n.distance))
-            .collect()
-    }
-}
-
 pub struct VPTree<F: Float + Debug + Default> {
     pub layers: Vec<VPNode<F>>,
     pub dimensions: usize,
@@ -319,9 +100,6 @@ impl<F: Float + Debug + Default> VPTree<F> {
         }
     }
     pub fn insert(&mut self, q: &[F], swid: Swid) {
-        if q.len() != self.dimensions {
-            panic!("Dimensions do not match");
-        }
         let bottom_id = self.swid_layer.len();
         self.swid_layer.push(swid);
         self.vector_layer.extend_from_slice(q);
@@ -358,7 +136,15 @@ impl<F: Float + Debug + Default> VPTree<F> {
     fn recursive_split(&mut self, id: NodeID) {
         if self.layers[id].children.len() > self.m {
             let new_id = self.layers.len();
-            let center = self.layers[id].children.iter().max().unwrap();
+            let center = self.layers[id]
+                .children
+                .iter()
+                .max_by(|a, b| {
+                    a.distance
+                        .partial_cmp(&b.distance)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .unwrap();
             let center_id = center.id;
             let center_vector = (match self.layers[id].is_leaf {
                 true => self
@@ -410,7 +196,6 @@ impl<F: Float + Debug + Default> VPTree<F> {
             }
 
             if self.layers[id].parent.is_some() {
-                // todo: double check this
                 let parent_id = self.layers[id].parent.unwrap();
                 let parent_center = self.layers[parent_id].center;
                 let distance =
@@ -464,7 +249,11 @@ impl<F: Float + Debug + Default> VPTree<F> {
                     id: n.id,
                     distance: get_distance(self.get_vector(n.id), q, self.space),
                 })
-                .min()
+                .min_by(|a, b| {
+                    a.distance
+                        .partial_cmp(&b.distance)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
                 .unwrap_or(Neighbor {
                     id: center,
                     distance: F::zero(),
@@ -550,29 +339,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_hnsw() {
-        let mut hnsw = HNSW::<f64>::new(16, Distance::Euclidean, 2, 16);
-        hnsw.insert(&[3.0, 3.0], 3);
-        hnsw.insert(&[4.0, 4.0], 4);
-        hnsw.insert(&[5.0, 5.0], 5);
-        hnsw.insert(&[6.0, 6.0], 6);
-        hnsw.insert(&[7.0, 7.0], 7);
-        hnsw.insert(&[8.0, 8.0], 8);
-        hnsw.insert(&[9.0, 9.0], 9);
-        hnsw.insert(&[0.0, 0.0], 420);
-        hnsw.insert(&[1.0, 1.0], 69);
-        hnsw.insert(&[2.0, 2.0], 42);
-        //dbg!(&hnsw);
-        assert_eq!(
-            hnsw.knn(&[0.0, 0.0], 3),
-            vec![
-                (420, 0.0),
-                (69, std::f64::consts::SQRT_2),
-                (42, 2.0 * std::f64::consts::SQRT_2)
-            ]
-        );
-    }
-    #[test]
     fn test_vp_tree() {
         let mut vptree = VPTree::<f64>::new(16, Distance::Euclidean, 2, 16);
         vptree.insert(&[3.0, 3.0], 3);
@@ -597,24 +363,8 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_10000() {
+    fn test_10000() {
         use microbench::*;
-        let mut hnsw = HNSW::<f64>::new(16, Distance::Euclidean, 2, 16);
-        let bench_options = Options::default();
-        microbench::bench(&bench_options, "hnsw_test_insert_10000", || {
-            for i in 0..10000 {
-                hnsw.insert(&[i as f64, i as f64], i);
-            }
-            hnsw = HNSW::<f64>::new(16, Distance::Euclidean, 2, 16);
-        });
-        for i in 0..10000 {
-            hnsw.insert(&[i as f64, i as f64], i);
-        }
-        microbench::bench(&bench_options, "hnsw_test_knn_10000", || {
-            for i in 0..10000 {
-                hnsw.knn(&[i as f64, i as f64], 3);
-            }
-        });
         let mut vptree = VPTree::<f64>::new(16, Distance::Euclidean, 2, 4);
         let bench_options = Options::default();
         microbench::bench(&bench_options, "vp_tree_test_insert_10000", || {
