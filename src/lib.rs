@@ -67,6 +67,7 @@ fn get_distance<F: Float + Debug + Default>(a: &[F], b: &[F], space: Distance) -
     }
 }
 
+#[derive(Debug)]
 pub struct VPTree<F: Float + Debug + Default> {
     pub layers: Vec<VPNode<F>>,
     pub dimensions: usize,
@@ -328,8 +329,87 @@ impl<F: Float + Debug + Default> VPTree<F> {
             .iter()
             .position(|swid| *swid == swid_to_remove)
             .unwrap();
+        let mut childless_nodes = Vec::new();
+        let mut non_leaf_nodes = Vec::new();
+        self.layers
+            .iter_mut()
+            .enumerate()
+            .for_each(|(index, node)| {
+                if node.is_leaf {
+                    node.children.retain(|n| n.id != id);
+                    if node.children.is_empty() {
+                        childless_nodes.push(index);
+                    } else if node.center == id {
+                        node.center = node
+                            .children
+                            .iter()
+                            .min_by(|a, b| {
+                                a.distance
+                                    .partial_cmp(&b.distance)
+                                    .unwrap_or(std::cmp::Ordering::Equal)
+                            })
+                            .unwrap()
+                            .id;
+                        node.children.iter_mut().for_each(|n| {
+                            let a = self.vector_layer.chunks(self.dimensions).nth(n.id).unwrap();
+                            let b = self
+                                .vector_layer
+                                .chunks(self.dimensions)
+                                .nth(node.center)
+                                .unwrap();
+                            n.distance = get_distance(a, b, self.space);
+                        });
+                    }
+                } else {
+                    non_leaf_nodes.push(index);
+                }
+            });
+        //ensure nothing ever refers to a childless node
+        loop {
+            non_leaf_nodes.iter().for_each(|index| {
+                self.layers[*index]
+                    .children
+                    .retain(|n| !childless_nodes.contains(&n.id));
+            });
+            childless_nodes.clear();
+            non_leaf_nodes.iter().for_each(|index| {
+                if self.layers[*index].children.is_empty() {
+                    childless_nodes.push(*index);
+                }
+            });
+            if childless_nodes.is_empty() {
+                break;
+            }
+        }
+        //remove the node from the swid_layer and vector_layer
+        let last = self.swid_layer.len() - 1;
+        self.swid_layer.swap(id, last);
+        self.swid_layer.pop();
+        let last_chunk = self
+            .vector_layer
+            .chunks(self.dimensions)
+            .nth(last)
+            .unwrap()
+            .to_vec();
+        self.vector_layer
+            .chunks_mut(self.dimensions)
+            .nth(id)
+            .unwrap()
+            .iter_mut()
+            .zip(last_chunk)
+            .for_each(|(a, b)| *a = b);
+        self.vector_layer.truncate(last * self.dimensions);
         self.layers.iter_mut().for_each(|node| {
-            node.children.retain(|n| n.id != id);
+            if node.is_leaf {
+                node.children.iter_mut().for_each(|n| {
+                    if n.id == last {
+                        n.id = id;
+                    }
+                });
+                if node.center == last {
+                    node.center = id;
+                }
+            }
         });
     }
 }
@@ -360,6 +440,17 @@ mod tests {
                 (42, 2.0 * std::f64::consts::SQRT_2)
             ]
         );
+        vptree.remove (420);
+        vptree.remove (3);
+        assert_eq!(
+            vptree.knn(&[0.0, 0.0], 3),
+            vec![
+                (69, std::f64::consts::SQRT_2),
+                (42, 2.0 * std::f64::consts::SQRT_2),
+                (4, 4.0 * std::f64::consts::SQRT_2)
+            ]
+        );
+        dbg!(&vptree);
     }
 
     #[test]
