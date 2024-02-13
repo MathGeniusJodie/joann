@@ -343,14 +343,20 @@ impl<F: Float + Debug + Default> VPTree<F> {
         let last = self.swid_layer.len() - 1;
         self.swid_layer.swap(id_to_remove, last);
         self.swid_layer.pop();
-        let last_vector = self.vector_layer
-        .chunks(self.dimensions)
-        .nth(last)
-        .unwrap().to_owned();
-        self.vector_layer.chunks_mut(self.dimensions).nth(id_to_remove).unwrap().iter_mut().zip(
-            last_vector.iter()
-        ).for_each(|(a, b)| *a = *b);
-        let mut new_tree:VPTree<F> = VPTree {
+        let last_vector = self
+            .vector_layer
+            .chunks(self.dimensions)
+            .nth(last)
+            .unwrap()
+            .to_owned();
+        self.vector_layer
+            .chunks_mut(self.dimensions)
+            .nth(id_to_remove)
+            .unwrap()
+            .iter_mut()
+            .zip(last_vector.iter())
+            .for_each(|(a, b)| *a = *b);
+        let mut new_tree: VPTree<F> = VPTree {
             layers: Vec::new(),
             dimensions: self.dimensions,
             swid_layer: Vec::new(),
@@ -360,7 +366,10 @@ impl<F: Float + Debug + Default> VPTree<F> {
             m: self.m,
             top_node: None,
         };
-        self.swid_layer.iter().zip(self.vector_layer.chunks(self.dimensions)).for_each(|(swid, vector)| new_tree.insert(vector, *swid));
+        self.swid_layer
+            .iter()
+            .zip(self.vector_layer.chunks(self.dimensions))
+            .for_each(|(swid, vector)| new_tree.insert(vector, *swid));
         self.layers = new_tree.layers;
     }
 }
