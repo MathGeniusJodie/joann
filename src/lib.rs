@@ -1,6 +1,13 @@
-use num_traits::Float;
-use std::fmt::Debug;
+use memmap2::{MmapMut, RemapOptions};
+use num_traits::{Float, ToBytes};
+use std::{
+    fmt::Debug,
+    fs::{File, OpenOptions},
+    path::Path,
+    vec,
+};
 type NodeID = usize;
+type Swid = u128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Distance {
@@ -11,7 +18,7 @@ pub enum Distance {
 }
 
 #[inline(never)]
-fn get_distance<F: Float + Debug + Default>(a: &[F], b: &[F], space: Distance) -> F {
+fn get_distance<F: Float + Debug + Default + ToBytes>(a: &[F], b: &[F], space: Distance) -> F {
     match space {
         Distance::Euclidean => {
             let mut sum: F = F::zero();
@@ -60,43 +67,120 @@ fn get_distance<F: Float + Debug + Default>(a: &[F], b: &[F], space: Distance) -
 }
 
 #[derive(Debug)]
-pub struct VPTree<F: Float + Debug + Default> {
+pub enum Store<T> {
+    Mmap((File, MmapMut)),
+    Vec(Vec<T>),
+}
+
+#[derive(Debug)]
+pub struct VPTree<'a, F: Float + Debug + Default + ToBytes> {
     pub nodes: Vec<Node<F>>,
     pub dimensions: usize,
-    pub vector_layer: Vec<F>,
+    pub vector_layer: &'a mut [F],
+    pub swid_layer: &'a mut [Swid],
+    pub vector_store: Store<F>,
+    pub swid_store: Store<Swid>,
     ef_construction: usize,
     space: Distance,
     m: usize,
     top_node: Option<NodeID>,
 }
 #[derive(Copy, Clone, Debug, Default)]
-pub struct Child<F: Float + Debug + Default> {
+pub struct Child<F: Float + Debug + Default + ToBytes> {
     distance: F,
     vector_id: NodeID,
     id: Option<NodeID>,
 }
 #[derive(Debug)]
-pub struct Node<F: Float + Debug + Default> {
+pub struct Node<F: Float + Debug + Default + ToBytes> {
     pub children: Vec<Child<F>>,
     pub parent: Option<NodeID>,
 }
-impl<F: Float + Debug + Default> Node<F> {
+impl<F: Float + Debug + Default + ToBytes> Node<F> {
     pub fn is_leaf(&self) -> bool {
         self.children.first().unwrap().id.is_none()
     }
 }
 
-impl<F: Float + Debug + Default> VPTree<F> {
-    pub fn new(ef_construction: usize, space: Distance, dimensions: usize, m: usize) -> VPTree<F> {
+impl<'a, F: Float + Debug + Default + ToBytes> VPTree<'a, F> {
+    pub fn new(
+        ef_construction: usize,
+        space: Distance,
+        dimensions: usize,
+        m: usize,
+    ) -> VPTree<'a, F> {
         VPTree {
             nodes: Vec::new(),
             dimensions,
-            vector_layer: Vec::new(),
+            vector_layer: &mut [],
+            swid_layer: &mut [],
+            vector_store: Store::Vec(Vec::new()),
+            swid_store: Store::Vec(Vec::new()),
             ef_construction,
             space,
             m,
             top_node: None,
         }
+    }
+    pub fn new_with_store(
+        ef_construction: usize,
+        space: Distance,
+        dimensions: usize,
+        m: usize,
+        vector_store: &Path,
+        swid_store: &Path,
+    ) -> VPTree<'a, F> {
+        let vector_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(vector_store)
+            .unwrap();
+        let swid_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(swid_store)
+            .unwrap();
+        let mut vector_mmap = unsafe { MmapMut::map_mut(&vector_file).unwrap() };
+        let mut swid_mmap = unsafe { MmapMut::map_mut(&swid_file).unwrap() };
+        let vector_layer = unsafe {
+            std::slice::from_raw_parts_mut(
+                vector_mmap.as_mut_ptr() as *mut F,
+                vector_mmap.len() / std::mem::size_of::<F>(),
+            )
+        };
+        let swid_layer = unsafe {
+            std::slice::from_raw_parts_mut(
+                swid_mmap.as_mut_ptr() as *mut Swid,
+                swid_mmap.len() / std::mem::size_of::<Swid>(),
+            )
+        };
+        let mut tree: VPTree<'_, F> = VPTree {
+            nodes: Vec::new(),
+            dimensions,
+            vector_layer: &mut [],
+            swid_layer: &mut [],
+            vector_store: Store::Vec(Vec::new()),
+            swid_store: Store::Vec(Vec::new()),
+            ef_construction,
+            space,
+            m,
+            top_node: None,
+        };
+        swid_layer
+            .iter()
+            .zip(vector_layer.chunks(dimensions))
+            .for_each(|(swid, vector)| {
+                tree.insert(vector, *swid);
+            });
+        tree.vector_store = Store::Mmap((vector_file, vector_mmap));
+        tree.swid_store = Store::Mmap((swid_file, swid_mmap));
+        tree.vector_layer = vector_layer;
+        tree.swid_layer = swid_layer;
+        tree
     }
     fn get_vector(&self, vector_id: NodeID) -> &[F] {
         self.vector_layer
@@ -152,9 +236,51 @@ impl<F: Float + Debug + Default> VPTree<F> {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
     }
-    pub fn insert(&mut self, q: &[F]) {
-        let vector_id = self.vector_layer.len() / self.dimensions;
-        self.vector_layer.extend_from_slice(q);
+    pub fn insert(&mut self, q: &[F], swid: Swid) {
+        let swid_id = self.swid_layer.len();
+        let vector_id = swid_id;
+        match &mut self.vector_store {
+            Store::Mmap((file, mmap)) => {
+                let len = self.dimensions * (vector_id + 1);
+                let bytes = len * std::mem::size_of::<F>();
+                file.set_len(bytes as u64).unwrap();
+                let options = RemapOptions::new();
+                options.may_move(true);
+                unsafe {
+                    mmap.remap(bytes, options).unwrap();
+                }
+                self.vector_layer =
+                    unsafe { std::slice::from_raw_parts_mut(mmap.as_mut_ptr() as *mut F, len) };
+                self.vector_layer
+                    [(vector_id * self.dimensions)..((vector_id + 1) * self.dimensions)]
+                    .copy_from_slice(q);
+            }
+            Store::Vec(vec) => {
+                vec.extend_from_slice(q);
+                self.vector_layer =
+                    unsafe { std::slice::from_raw_parts_mut(vec.as_mut_ptr(), vec.len()) };
+            }
+        }
+        match &mut self.swid_store {
+            Store::Mmap((file, mmap)) => {
+                let len = swid_id + 1;
+                let bytes = len * std::mem::size_of::<Swid>();
+                file.set_len(bytes as u64).unwrap();
+                let options = RemapOptions::new();
+                options.may_move(true);
+                unsafe {
+                    mmap.remap(bytes, options).unwrap();
+                }
+                self.swid_layer =
+                    unsafe { std::slice::from_raw_parts_mut(mmap.as_mut_ptr() as *mut Swid, len) };
+                self.swid_layer[swid_id] = swid;
+            }
+            Store::Vec(vec) => {
+                vec.push(swid);
+                self.swid_layer =
+                    unsafe { std::slice::from_raw_parts_mut(vec.as_mut_ptr(), vec.len()) };
+            }
+        }
         let closest_leaf = self.get_closest_leaf(q);
         match closest_leaf {
             Some(leaf_id) => {
@@ -230,7 +356,7 @@ impl<F: Float + Debug + Default> VPTree<F> {
         }
     }
 
-    pub fn knn(&self, q: &[F], k: usize) -> Vec<(&[F], F)> {
+    pub fn knn(&self, q: &[F], k: usize) -> Vec<(Swid, F)> {
         let closest_leaf = self.get_closest_leaf(q);
         if closest_leaf.is_none() {
             return Vec::new();
@@ -254,7 +380,8 @@ impl<F: Float + Debug + Default> VPTree<F> {
             if node.is_leaf() {
                 for child in &node.children {
                     let distance = get_distance(q, self.get_vector(child.vector_id), self.space);
-                    result.push((self.get_vector(child.vector_id), distance));
+                    let swid = self.swid_layer[child.vector_id];
+                    result.push((swid, distance));
                 }
             } else {
                 for child in &node.children {
@@ -266,21 +393,28 @@ impl<F: Float + Debug + Default> VPTree<F> {
         result.truncate(k);
         result
     }
-    pub fn remove(&mut self, vector_to_remove: &[F]) {
+    pub fn remove(&mut self, swid_to_remove: Swid) {
         let mut new_vp_tree = Self {
             nodes: Vec::new(),
             dimensions: self.dimensions,
-            vector_layer: Vec::new(),
+            vector_layer: &mut [],
+            swid_layer: &mut [],
+            vector_store: Store::Vec(Vec::new()),
+            swid_store: Store::Vec(Vec::new()),
             ef_construction: self.ef_construction,
             space: self.space,
             m: self.m,
             top_node: None,
         };
-        self.vector_layer.chunks(self.dimensions).for_each(|v| {
-            if v != vector_to_remove {
-                new_vp_tree.insert(v);
-            }
-        });
+        // todo clone mmap
+        self.vector_layer
+            .chunks(self.dimensions)
+            .zip(self.swid_layer.iter())
+            .for_each(|(vector, swid)| {
+                if *swid != swid_to_remove {
+                    new_vp_tree.insert(vector, *swid);
+                }
+            });
         *self = new_vp_tree;
     }
 }
@@ -292,33 +426,33 @@ mod tests {
     #[test]
     fn test_vp_tree() {
         let mut vptree = VPTree::<f64>::new(16, Distance::Euclidean, 2, 4);
-        vptree.insert(&[3.0, 3.0]);
-        vptree.insert(&[4.0, 4.0]);
-        vptree.insert(&[5.0, 5.0]);
-        vptree.insert(&[6.0, 6.0]);
-        vptree.insert(&[7.0, 7.0]);
-        vptree.insert(&[8.0, 8.0]);
-        vptree.insert(&[9.0, 9.0]);
-        vptree.insert(&[0.0, 0.0]);
-        vptree.insert(&[1.0, 1.0]);
-        vptree.insert(&[2.0, 2.0]);
+        vptree.insert(&[3.0, 3.0], 4);
+        vptree.insert(&[4.0, 4.0], 352);
+        vptree.insert(&[5.0, 5.0], 43);
+        vptree.insert(&[6.0, 6.0], 41);
+        vptree.insert(&[7.0, 7.0], 35);
+        vptree.insert(&[8.0, 8.0], 52);
+        vptree.insert(&[9.0, 9.0], 42);
+        vptree.insert(&[0.0, 0.0], 32);
+        vptree.insert(&[1.0, 1.0], 222);
+        vptree.insert(&[2.0, 2.0], 567);
         //dbg!(&vptree);
         assert_eq!(
             vptree.knn(&[0.0, 0.0], 3),
             vec![
-                (vec![0.0, 0.0].as_slice(), 0.0),
-                (vec![1.0, 1.0].as_slice(), std::f64::consts::SQRT_2),
-                (vec![2.0, 2.0].as_slice(), 2.0 * std::f64::consts::SQRT_2)
+                (32, 0.0),
+                (222, std::f64::consts::SQRT_2),
+                (567, 2.0 * std::f64::consts::SQRT_2)
             ]
         );
-        vptree.remove(&[0.0, 0.0]);
-        vptree.remove(&[3.0, 3.0]);
+        vptree.remove(32);
+        vptree.remove(4);
         assert_eq!(
             vptree.knn(&[0.0, 0.0], 3),
             vec![
-                (vec![1.0, 1.0].as_slice(), std::f64::consts::SQRT_2),
-                (vec![2.0, 2.0].as_slice(), 2.0 * std::f64::consts::SQRT_2),
-                (vec![4.0, 4.0].as_slice(), 4.0 * std::f64::consts::SQRT_2)
+                (222, std::f64::consts::SQRT_2),
+                (567, 2.0 * std::f64::consts::SQRT_2),
+                (352, 4.0 * std::f64::consts::SQRT_2)
             ]
         );
         //dbg!(&vptree);
@@ -331,12 +465,12 @@ mod tests {
         let bench_options = Options::default();
         microbench::bench(&bench_options, "vp_tree_test_insert_10000", || {
             for i in 0..10000 {
-                vptree.insert(&[i as f64, i as f64]);
+                vptree.insert(&[i as f64, i as f64], i);
             }
             vptree = VPTree::<f64>::new(16, Distance::Euclidean, 2, 4);
         });
         for i in 0..10000 {
-            vptree.insert(&[i as f64, i as f64]);
+            vptree.insert(&[i as f64, i as f64], i);
         }
         microbench::bench(&bench_options, "vp_tree_test_knn_10000", || {
             for i in 0..10000 {
