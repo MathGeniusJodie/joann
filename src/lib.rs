@@ -236,51 +236,62 @@ impl<'a, F: Float + Debug + Default + ToBytes> VPTree<'a, F> {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
     }
+    fn resize(&mut self, n: isize) {
+        let new_len = if n > 0 {
+            self.vector_layer.len() + n.unsigned_abs() * self.dimensions
+        } else {
+            self.vector_layer.len() - n.unsigned_abs() * self.dimensions
+        };
+        match &mut self.vector_store {
+            Store::Mmap((file, mmap)) => {
+                let bytes = new_len * std::mem::size_of::<F>();
+                file.set_len(bytes as u64).unwrap();
+                let options = RemapOptions::new();
+                options.may_move(true);
+                unsafe {
+                    mmap.remap(bytes, options).unwrap();
+                }
+                self.vector_layer =
+                    unsafe { std::slice::from_raw_parts_mut(mmap.as_mut_ptr() as *mut F, new_len) };
+            }
+            Store::Vec(vec) => {
+                vec.resize(new_len, F::default());
+                self.vector_layer =
+                    unsafe { std::slice::from_raw_parts_mut(vec.as_mut_ptr(), new_len) };
+            }
+        }
+        let new_len = if n > 0 {
+            self.swid_layer.len() + n.unsigned_abs()
+        } else {
+            self.swid_layer.len() - n.unsigned_abs()
+        };
+        match &mut self.swid_store {
+            Store::Mmap((file, mmap)) => {
+                let bytes = new_len * std::mem::size_of::<Swid>();
+                file.set_len(bytes as u64).unwrap();
+                let options = RemapOptions::new();
+                options.may_move(true);
+                unsafe {
+                    mmap.remap(bytes, options).unwrap();
+                }
+                self.swid_layer = unsafe {
+                    std::slice::from_raw_parts_mut(mmap.as_mut_ptr() as *mut Swid, new_len)
+                };
+            }
+            Store::Vec(vec) => {
+                vec.resize(new_len, Swid::default());
+                self.swid_layer =
+                    unsafe { std::slice::from_raw_parts_mut(vec.as_mut_ptr(), new_len) };
+            }
+        }
+    }
     pub fn insert(&mut self, q: &[F], swid: Swid) {
         let swid_id = self.swid_layer.len();
         let vector_id = swid_id;
-        match &mut self.vector_store {
-            Store::Mmap((file, mmap)) => {
-                let len = self.dimensions * (vector_id + 1);
-                let bytes = len * std::mem::size_of::<F>();
-                file.set_len(bytes as u64).unwrap();
-                let options = RemapOptions::new();
-                options.may_move(true);
-                unsafe {
-                    mmap.remap(bytes, options).unwrap();
-                }
-                self.vector_layer =
-                    unsafe { std::slice::from_raw_parts_mut(mmap.as_mut_ptr() as *mut F, len) };
-                self.vector_layer
-                    [(vector_id * self.dimensions)..((vector_id + 1) * self.dimensions)]
-                    .copy_from_slice(q);
-            }
-            Store::Vec(vec) => {
-                vec.extend_from_slice(q);
-                self.vector_layer =
-                    unsafe { std::slice::from_raw_parts_mut(vec.as_mut_ptr(), vec.len()) };
-            }
-        }
-        match &mut self.swid_store {
-            Store::Mmap((file, mmap)) => {
-                let len = swid_id + 1;
-                let bytes = len * std::mem::size_of::<Swid>();
-                file.set_len(bytes as u64).unwrap();
-                let options = RemapOptions::new();
-                options.may_move(true);
-                unsafe {
-                    mmap.remap(bytes, options).unwrap();
-                }
-                self.swid_layer =
-                    unsafe { std::slice::from_raw_parts_mut(mmap.as_mut_ptr() as *mut Swid, len) };
-                self.swid_layer[swid_id] = swid;
-            }
-            Store::Vec(vec) => {
-                vec.push(swid);
-                self.swid_layer =
-                    unsafe { std::slice::from_raw_parts_mut(vec.as_mut_ptr(), vec.len()) };
-            }
-        }
+        self.resize(1);
+        self.swid_layer[swid_id] = swid;
+        self.vector_layer[(vector_id * self.dimensions)..((vector_id + 1) * self.dimensions)]
+            .copy_from_slice(q);
         let closest_leaf = self.get_closest_leaf(q);
         match closest_leaf {
             Some(leaf_id) => {
@@ -393,29 +404,34 @@ impl<'a, F: Float + Debug + Default + ToBytes> VPTree<'a, F> {
         result.truncate(k);
         result
     }
-    pub fn remove(&mut self, swid_to_remove: Swid) {
-        let mut new_vp_tree = Self {
-            nodes: Vec::new(),
-            dimensions: self.dimensions,
-            vector_layer: &mut [],
-            swid_layer: &mut [],
-            vector_store: Store::Vec(Vec::new()),
-            swid_store: Store::Vec(Vec::new()),
-            ef_construction: self.ef_construction,
-            space: self.space,
-            m: self.m,
-            top_node: None,
-        };
-        // todo clone mmap
-        self.vector_layer
-            .chunks(self.dimensions)
-            .zip(self.swid_layer.iter())
-            .for_each(|(vector, swid)| {
-                if *swid != swid_to_remove {
-                    new_vp_tree.insert(vector, *swid);
-                }
+    pub fn remove(&mut self, swid_to_remove: Swid) -> Result<(), ()>{
+        match self
+            .swid_layer
+            .iter()
+            .position(|&swid| swid == swid_to_remove)
+        {
+            Some(swid_id) => {
+                let last = self.swid_layer.len() - 1;
+                let mut last_vector = self.vector_layer[last * self.dimensions..].to_owned();
+                self.swid_layer.swap(swid_id, last);
+                self.vector_layer[swid_id * self.dimensions..(swid_id + 1) * self.dimensions]
+                    .swap_with_slice(last_vector.as_mut_slice());
+                self.resize(-1);
+            }
+            None => {
+                return Err(())
+            }
+        }
+        let mut new_tree = VPTree::new(self.ef_construction, self.space, self.dimensions, self.m);
+        self.swid_layer
+            .iter()
+            .zip(self.vector_layer.chunks(self.dimensions))
+            .for_each(|(swid, vector)| {
+                new_tree.insert(vector, *swid);
             });
-        *self = new_vp_tree;
+        self.nodes = new_tree.nodes;
+        self.top_node = new_tree.top_node;
+        Ok(())
     }
 }
 
