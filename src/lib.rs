@@ -1,4 +1,4 @@
-use memmap2::{MmapMut, RemapOptions};
+use memmap2::MmapMut;
 use num_traits::{Float, ToBytes};
 use std::{
     fmt::Debug,
@@ -261,24 +261,16 @@ impl<'a, F: Float + Debug + Default + ToBytes> VPTree<'a, F> {
         } else {
             self.swid_layer.len() - n.unsigned_abs()
         };
-        match &mut self.swid_store {
-            Store::Mmap((file, mmap)) => {
+        match self.swid_store {
+            Store::Mmap((ref file, ref mut mmap)) => {
                 let bytes = new_len * std::mem::size_of::<Swid>();
                 file.set_len(bytes as u64).unwrap();
-                let options = RemapOptions::new();
-                options.may_move(true);
-                unsafe {
-                    while mmap.remap(bytes, options).is_err() {
-                        println!("remap failed, retrying...");
-                        println!("bytes: {}", bytes);
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-                    }
-                }
+                *mmap = unsafe { MmapMut::map_mut(file).unwrap() };
                 self.swid_layer = unsafe {
                     std::slice::from_raw_parts_mut(mmap.as_mut_ptr() as *mut Swid, new_len)
                 };
             }
-            Store::Vec(vec) => {
+            Store::Vec(ref mut vec) => {
                 vec.resize(new_len, Swid::default());
                 self.swid_layer =
                     unsafe { std::slice::from_raw_parts_mut(vec.as_mut_ptr(), new_len) };
@@ -296,13 +288,13 @@ impl<'a, F: Float + Debug + Default + ToBytes> VPTree<'a, F> {
             Store::Mmap((_file, mmap)) => {
                 mmap.flush().unwrap();
             }
-            Store::Vec(_) => ()
+            Store::Vec(_) => (),
         };
         match &mut self.swid_store {
             Store::Mmap((_file, mmap)) => {
                 mmap.flush().unwrap();
             }
-            Store::Vec(_) => ()
+            Store::Vec(_) => (),
         };
         let closest_leaf = self.get_closest_leaf(q);
         match closest_leaf {
@@ -416,7 +408,7 @@ impl<'a, F: Float + Debug + Default + ToBytes> VPTree<'a, F> {
         result.truncate(k);
         result
     }
-    pub fn remove(&mut self, swid_to_remove: Swid) -> Result<(), ()>{
+    pub fn remove(&mut self, swid_to_remove: Swid) -> Result<(), ()> {
         match self
             .swid_layer
             .iter()
@@ -432,19 +424,17 @@ impl<'a, F: Float + Debug + Default + ToBytes> VPTree<'a, F> {
                     Store::Mmap((_file, mmap)) => {
                         mmap.flush().unwrap();
                     }
-                    Store::Vec(_) => ()
+                    Store::Vec(_) => (),
                 };
                 match &mut self.swid_store {
                     Store::Mmap((_file, mmap)) => {
                         mmap.flush().unwrap();
                     }
-                    Store::Vec(_) => ()
+                    Store::Vec(_) => (),
                 };
                 self.resize(-1);
             }
-            None => {
-                return Err(())
-            }
+            None => return Err(()),
         }
         let mut new_tree = VPTree::new(self.ef_construction, self.space, self.dimensions, self.m);
         self.swid_layer
