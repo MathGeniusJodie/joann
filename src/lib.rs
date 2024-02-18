@@ -130,20 +130,28 @@ impl<'a, F: Float + Debug + Default + ToBytes> VPTree<'a, F> {
         vector_store: &Path,
         swid_store: &Path,
     ) -> VPTree<'a, F> {
-        let vector_file = OpenOptions::new()
+        let vector_file = match OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
-            .truncate(false)
-            .open(vector_store)
-            .unwrap();
-        let swid_file = OpenOptions::new()
+            .open(vector_store) {
+                Ok(file) => file,
+                Err(_) => {
+                    print!("{}", vector_store.display());
+                    panic!("Error opening vector store file")
+                }
+            };
+        let swid_file = match OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
-            .truncate(false)
-            .open(swid_store)
-            .unwrap();
+            .open(swid_store) {
+                Ok(file) => file,
+                Err(_) => {
+                    print!("{}", swid_store.display());
+                    panic!("Error opening swid store file")
+                }
+            };
         let mut vector_mmap = unsafe { MmapMut::map_mut(&vector_file).unwrap() };
         let mut swid_mmap = unsafe { MmapMut::map_mut(&swid_file).unwrap() };
         let vector_layer = unsafe {
