@@ -247,7 +247,11 @@ impl<'a, F: Float + Debug + Default + ToBytes> VPTree<'a, F> {
                 let options = RemapOptions::new();
                 options.may_move(true);
                 unsafe {
-                    mmap.remap(bytes, options).unwrap();
+                    while mmap.remap(bytes, options).is_err() {
+                        println!("remap failed, retrying...");
+                        println!("bytes: {}", bytes);
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
                 }
                 self.vector_layer =
                     unsafe { std::slice::from_raw_parts_mut(mmap.as_mut_ptr() as *mut F, new_len) };
@@ -290,6 +294,18 @@ impl<'a, F: Float + Debug + Default + ToBytes> VPTree<'a, F> {
         self.swid_layer[swid_id] = swid;
         self.vector_layer[(vector_id * self.dimensions)..((vector_id + 1) * self.dimensions)]
             .copy_from_slice(q);
+        match &mut self.vector_store {
+            Store::Mmap((_file, mmap)) => {
+                mmap.flush().unwrap();
+            }
+            Store::Vec(_) => ()
+        };
+        match &mut self.swid_store {
+            Store::Mmap((_file, mmap)) => {
+                mmap.flush().unwrap();
+            }
+            Store::Vec(_) => ()
+        };
         let closest_leaf = self.get_closest_leaf(q);
         match closest_leaf {
             Some(leaf_id) => {
@@ -414,6 +430,18 @@ impl<'a, F: Float + Debug + Default + ToBytes> VPTree<'a, F> {
                 self.swid_layer.swap(swid_id, last);
                 self.vector_layer[swid_id * self.dimensions..(swid_id + 1) * self.dimensions]
                     .swap_with_slice(last_vector.as_mut_slice());
+                match &mut self.vector_store {
+                    Store::Mmap((_file, mmap)) => {
+                        mmap.flush().unwrap();
+                    }
+                    Store::Vec(_) => ()
+                };
+                match &mut self.swid_store {
+                    Store::Mmap((_file, mmap)) => {
+                        mmap.flush().unwrap();
+                    }
+                    Store::Vec(_) => ()
+                };
                 self.resize(-1);
             }
             None => {
