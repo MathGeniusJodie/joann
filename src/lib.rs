@@ -1,5 +1,5 @@
 use memmap2::MmapMut;
-use num_traits::{Float, ToBytes};
+use num_traits::Float;
 use std::{
     fmt::Debug,
     fs::{File, OpenOptions},
@@ -18,7 +18,7 @@ pub enum Distance {
 }
 
 #[inline(never)]
-fn get_distance<F: Float + Debug + Default + ToBytes>(a: &[F], b: &[F], space: Distance) -> F {
+fn get_distance<F: Float + Debug>(a: &[F], b: &[F], space: Distance) -> F {
     match space {
         Distance::Euclidean => {
             let mut sum: F = F::zero();
@@ -73,7 +73,7 @@ pub enum Store<T> {
 }
 
 #[derive(Debug)]
-pub struct VPTree<'a, F: Float + Debug + Default + ToBytes> {
+pub struct VPTree<'a, F: Float + Debug> {
     pub nodes: Vec<Node<F>>,
     pub dimensions: usize,
     pub vector_layer: &'a mut [F],
@@ -86,23 +86,23 @@ pub struct VPTree<'a, F: Float + Debug + Default + ToBytes> {
     top_node: Option<NodeID>,
 }
 #[derive(Copy, Clone, Debug, Default)]
-pub struct Child<F: Float + Debug + Default + ToBytes> {
+pub struct Child<F: Float + Debug> {
     distance: F,
     vector_id: NodeID,
     id: Option<NodeID>,
 }
 #[derive(Debug)]
-pub struct Node<F: Float + Debug + Default + ToBytes> {
+pub struct Node<F: Float + Debug> {
     pub children: Vec<Child<F>>,
     pub parent: Option<NodeID>,
 }
-impl<F: Float + Debug + Default + ToBytes> Node<F> {
+impl<F: Float + Debug> Node<F> {
     pub fn is_leaf(&self) -> bool {
         self.children.first().unwrap().id.is_none()
     }
 }
 
-impl<'a, F: Float + Debug + Default + ToBytes> VPTree<'a, F> {
+impl<'a, F: Float + Debug> VPTree<'a, F> {
     pub fn new(
         ef_construction: usize,
         space: Distance,
@@ -251,7 +251,7 @@ impl<'a, F: Float + Debug + Default + ToBytes> VPTree<'a, F> {
                     unsafe { std::slice::from_raw_parts_mut(mmap.as_mut_ptr() as *mut F, new_len) };
             }
             Store::Vec(ref mut vec) => {
-                vec.resize(new_len, F::default());
+                vec.resize(new_len, F::zero());
                 self.vector_layer =
                     unsafe { std::slice::from_raw_parts_mut(vec.as_mut_ptr(), new_len) };
             }
