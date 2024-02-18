@@ -274,7 +274,11 @@ impl<'a, F: Float + Debug + Default + ToBytes> VPTree<'a, F> {
                 let options = RemapOptions::new();
                 options.may_move(true);
                 unsafe {
-                    mmap.remap(bytes, options).unwrap();
+                    while mmap.remap(bytes, options).is_err() {
+                        println!("remap failed, retrying...");
+                        println!("bytes: {}", bytes);
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
                 }
                 self.swid_layer = unsafe {
                     std::slice::from_raw_parts_mut(mmap.as_mut_ptr() as *mut Swid, new_len)
