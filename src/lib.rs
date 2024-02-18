@@ -240,23 +240,17 @@ impl<'a, F: Float + Debug + Default + ToBytes> VPTree<'a, F> {
         } else {
             self.vector_layer.len() - n.unsigned_abs() * self.dimensions
         };
-        match &mut self.vector_store {
-            Store::Mmap((file, mmap)) => {
+        match self.vector_store {
+            Store::Mmap((ref file, ref mut mmap)) => {
                 let bytes = new_len * std::mem::size_of::<F>();
                 file.set_len(bytes as u64).unwrap();
-                let options = RemapOptions::new();
-                options.may_move(true);
-                unsafe {
-                    while mmap.remap(bytes, options).is_err() {
-                        println!("remap failed, retrying...");
-                        println!("bytes: {}", bytes);
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-                    }
-                }
+
+                *mmap = unsafe { MmapMut::map_mut(file).unwrap() };
+
                 self.vector_layer =
                     unsafe { std::slice::from_raw_parts_mut(mmap.as_mut_ptr() as *mut F, new_len) };
             }
-            Store::Vec(vec) => {
+            Store::Vec(ref mut vec) => {
                 vec.resize(new_len, F::default());
                 self.vector_layer =
                     unsafe { std::slice::from_raw_parts_mut(vec.as_mut_ptr(), new_len) };
