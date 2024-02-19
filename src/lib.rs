@@ -19,26 +19,48 @@ pub enum Distance {
 
 #[inline(never)]
 fn get_distance<F: Float + Debug>(a: &[F], b: &[F], space: Distance) -> F {
+    #[cfg(target_feature = "avx")]
+    const STRIDE: usize = 8;
+    #[cfg(not(target_feature = "avx"))]
+    const STRIDE: usize = 4;
+    let chunks_a = a.chunks_exact(STRIDE);
+    let chunks_b = b.chunks_exact(STRIDE);
+    let rem_a = chunks_a.remainder();
+    let rem_b = chunks_b.remainder();
     match space {
         Distance::Euclidean => {
-            let mut sum: F = F::zero();
-            for i in 0..a.len() {
-                let diff = a[i] - b[i];
+            let mut sum = [F::zero(); STRIDE];
+            for (a, b) in chunks_a.zip(chunks_b) {
+                for i in 0..STRIDE {
+                    let diff = a[i] - b[i];
+                    sum[i] = diff.mul_add(diff, sum[i]);
+                }
+            }
+            let mut sum = sum.iter().fold(F::zero(), |acc, &x| acc + x);
+            for i in 0..rem_a.len() {
+                let diff = rem_a[i] - rem_b[i];
                 sum = diff.mul_add(diff, sum);
             }
             sum.sqrt()
         }
         Distance::Cosine => {
-            let mut dot = F::zero();
-            let mut xx = F::zero();
-            let mut yy = F::zero();
-
-            for i in 0..a.len() {
-                let xi = a[i];
-                let yi = b[i];
-                dot = dot + xi * yi;
-                xx = xx + xi * xi;
-                yy = yy + yi * yi;
+            let mut dot = [F::zero(); STRIDE];
+            let mut xx = [F::zero(); STRIDE];
+            let mut yy = [F::zero(); STRIDE];
+            for (a, b) in chunks_a.zip(chunks_b) {
+                for i in 0..STRIDE {
+                    dot[i] = a[i].mul_add(b[i], dot[i]);
+                    xx[i] = a[i].mul_add(a[i], xx[i]);
+                    yy[i] = b[i].mul_add(b[i], yy[i]);
+                }
+            }
+            let mut dot = dot.iter().fold(F::zero(), |acc, &x| acc + x);
+            let mut xx = xx.iter().fold(F::zero(), |acc, &x| acc + x);
+            let mut yy = yy.iter().fold(F::zero(), |acc, &x| acc + x);
+            for i in 0..rem_a.len() {
+                dot = rem_a[i].mul_add(rem_b[i], dot);
+                xx = rem_a[i].mul_add(rem_a[i], xx);
+                yy = rem_b[i].mul_add(rem_b[i], yy);
             }
 
             //handle 0 vectors
@@ -49,17 +71,30 @@ fn get_distance<F: Float + Debug>(a: &[F], b: &[F], space: Distance) -> F {
             F::one() - dot / (xx * yy).sqrt()
         }
         Distance::L2 => {
-            let mut sum: F = F::zero();
-            for i in 0..a.len() {
-                let diff = a[i] - b[i];
+            let mut sum = [F::zero(); STRIDE];
+            for (a, b) in chunks_a.zip(chunks_b) {
+                for i in 0..STRIDE {
+                    let diff = a[i] - b[i];
+                    sum[i] = diff.mul_add(diff, sum[i]);
+                }
+            }
+            let mut sum = sum.iter().fold(F::zero(), |acc, &x| acc + x);
+            for i in 0..rem_a.len() {
+                let diff = rem_a[i] - rem_b[i];
                 sum = diff.mul_add(diff, sum);
             }
             sum
         }
         Distance::IP => {
-            let mut dot: F = F::zero();
-            for i in 0..a.len() {
-                dot = a[i].mul_add(b[i], dot);
+            let mut dot = [F::zero(); STRIDE];
+            for (a, b) in chunks_a.zip(chunks_b) {
+                for i in 0..STRIDE {
+                    dot[i] = a[i].mul_add(b[i], dot[i]);
+                }
+            }
+            let mut dot = dot.iter().fold(F::zero(), |acc, &x| acc + x);
+            for i in 0..rem_a.len() {
+                dot = rem_a[i].mul_add(rem_b[i], dot);
             }
             dot
         }
@@ -491,20 +526,20 @@ mod tests {
     #[test]
     fn test_10000() {
         use microbench::*;
-        let mut vptree = VPTree::<f64>::new(16, Distance::Euclidean, 2, 4);
+        let mut vptree = VPTree::<f32>::new(16, Distance::Euclidean, 2, 4);
         let bench_options = Options::default();
         microbench::bench(&bench_options, "vp_tree_test_insert_10000", || {
             for i in 0..10000 {
-                vptree.insert(&[i as f64, i as f64], i);
+                vptree.insert(&[i as f32, i as f32], i);
             }
-            vptree = VPTree::<f64>::new(16, Distance::Euclidean, 2, 4);
+            vptree = VPTree::<f32>::new(16, Distance::Euclidean, 2, 4);
         });
         for i in 0..10000 {
-            vptree.insert(&[i as f64, i as f64], i);
+            vptree.insert(&[i as f32, i as f32], i);
         }
         microbench::bench(&bench_options, "vp_tree_test_knn_10000", || {
             for i in 0..10000 {
-                vptree.knn(&[i as f64, i as f64], 3);
+                vptree.knn(&[i as f32, i as f32], 3);
             }
         });
     }
