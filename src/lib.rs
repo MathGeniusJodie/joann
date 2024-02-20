@@ -407,37 +407,34 @@ impl<'a, F: Float + Debug> VPTree<'a, F> {
     }
 
     pub fn knn(&self, q: &[F], k: usize) -> Vec<(Swid, F)> {
-        let closest_leaf = self.get_closest_leaf(q);
-        if closest_leaf.is_none() {
-            return Vec::new();
-        }
         let mut result = Vec::with_capacity(self.ef_construction);
-        let mut n = self.m;
-        let mut id = closest_leaf.unwrap();
-        loop {
-            if n >= self.ef_construction {
-                break;
-            }
-            if self.nodes[id].parent.is_none() {
-                break;
-            }
-            id = self.nodes[id].parent.unwrap();
-            n *= self.m;
-        }
-        let mut stack = vec![id];
-        while let Some(id) = stack.pop() {
-            let node = &self.nodes[id];
-            if node.is_leaf() {
-                for child in &node.children {
-                    let distance = get_distance(q, self.get_vector(child.vector_id), self.space);
-                    let swid = self.swid_layer[child.vector_id];
-                    result.push((swid, distance));
-                }
-            } else {
-                for child in &node.children {
-                    stack.push(child.id.unwrap());
+        let mut current_id = self.top_node.unwrap();
+        let mut stack: Vec<(usize, F)> = Vec::new();
+        while result.len() < self.ef_construction {
+            for child in &self.nodes[current_id].children {
+                let distance = get_distance(q, self.get_vector(child.vector_id), self.space);
+                if self.nodes[current_id].is_leaf() {
+                    // todo add filter function here
+                    result.push((self.swid_layer[child.vector_id], distance));
+                } else {
+                    let i = match stack.binary_search_by(|a| {
+                        distance
+                            .partial_cmp(&a.1)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    }) {
+                        Ok(i) => i,
+                        Err(i) => i,
+                    };
+                    if stack.len() < self.ef_construction || i > stack.len() - self.ef_construction
+                    {
+                        stack.insert(i, (child.id.unwrap(), distance));
+                    }
                 }
             }
+            current_id = match stack.pop() {
+                Some(x) => x.0,
+                None => break,
+            };
         }
         result.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         result.truncate(k);
@@ -490,7 +487,7 @@ mod tests {
 
     #[test]
     fn test_vp_tree() {
-        let mut vptree = VPTree::<f64>::new(16, Distance::Euclidean, 2, 4);
+        let mut vptree = VPTree::<f64>::new(8, Distance::Euclidean, 2, 4);
         vptree.insert(&[3.0, 3.0], 4);
         vptree.insert(&[4.0, 4.0], 352);
         vptree.insert(&[5.0, 5.0], 43);
@@ -526,13 +523,13 @@ mod tests {
     #[test]
     fn test_10000() {
         use microbench::*;
-        let mut vptree = VPTree::<f32>::new(16, Distance::Euclidean, 2, 4);
+        let mut vptree = VPTree::<f32>::new(8, Distance::Euclidean, 2, 4);
         let bench_options = Options::default();
         microbench::bench(&bench_options, "vp_tree_test_insert_10000", || {
             for i in 0..10000 {
                 vptree.insert(&[i as f32, i as f32], i);
             }
-            vptree = VPTree::<f32>::new(16, Distance::Euclidean, 2, 4);
+            vptree = VPTree::<f32>::new(8, Distance::Euclidean, 2, 4);
         });
         for i in 0..10000 {
             vptree.insert(&[i as f32, i as f32], i);
