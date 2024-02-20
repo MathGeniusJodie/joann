@@ -392,10 +392,15 @@ impl<'a, F: Float + Debug> VPTree<'a, F> {
             self.top_node = Some(new_parent_id);
         }
     }
-    pub fn knn (&self, q: &[F], k: usize) -> Vec<(Swid, F)> {
+    pub fn knn(&self, q: &[F], k: usize) -> Vec<(Swid, F)> {
         self.knn_with_filter(q, k, |_| true)
     }
-    pub fn knn_with_filter(&self, q: &[F], k: usize, filter: fn ((Swid,F)) -> bool) -> Vec<(Swid, F)> {
+    pub fn knn_with_filter(
+        &self,
+        q: &[F],
+        k: usize,
+        filter: fn((Swid, F)) -> bool,
+    ) -> Vec<(Swid, F)> {
         let mut result: Vec<(u128, F)> = Vec::with_capacity(k);
         let mut current_id = self.top_node.unwrap();
         let mut current_distance = get_distance(
