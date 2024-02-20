@@ -115,7 +115,6 @@ pub struct VPTree<'a, F: Float + Debug> {
     pub swid_layer: &'a mut [Swid],
     pub vector_store: Store<F>,
     pub swid_store: Store<Swid>,
-    ef_construction: usize,
     space: Distance,
     m: usize,
     top_node: Option<NodeID>,
@@ -138,12 +137,7 @@ impl<F: Float + Debug> Node<F> {
 }
 
 impl<'a, F: Float + Debug> VPTree<'a, F> {
-    pub fn new(
-        ef_construction: usize,
-        space: Distance,
-        dimensions: usize,
-        m: usize,
-    ) -> VPTree<'a, F> {
+    pub fn new(space: Distance, dimensions: usize, m: usize) -> VPTree<'a, F> {
         VPTree {
             nodes: Vec::new(),
             dimensions,
@@ -151,14 +145,12 @@ impl<'a, F: Float + Debug> VPTree<'a, F> {
             swid_layer: &mut [],
             vector_store: Store::Vec(Vec::new()),
             swid_store: Store::Vec(Vec::new()),
-            ef_construction,
             space,
             m,
             top_node: None,
         }
     }
     pub fn new_with_store(
-        ef_construction: usize,
         space: Distance,
         dimensions: usize,
         m: usize,
@@ -198,7 +190,6 @@ impl<'a, F: Float + Debug> VPTree<'a, F> {
             swid_layer: &mut [],
             vector_store: Store::Vec(Vec::new()),
             swid_store: Store::Vec(Vec::new()),
-            ef_construction,
             space,
             m,
             top_node: None,
@@ -407,14 +398,23 @@ impl<'a, F: Float + Debug> VPTree<'a, F> {
     }
 
     pub fn knn(&self, q: &[F], k: usize) -> Vec<(Swid, F)> {
-        let mut result = Vec::with_capacity(self.ef_construction);
+        let mut result: Vec<(u128, F)> = Vec::with_capacity(k);
         let mut current_id = self.top_node.unwrap();
-        let mut stack: Vec<(usize, F)> = Vec::new();
-        while result.len() < self.ef_construction {
-            for child in &self.nodes[current_id].children {
-                let distance = get_distance(q, self.get_vector(child.vector_id), self.space);
+        let mut current_distance = get_distance(
+            q,
+            self.get_vector(self.nodes[current_id].children[0].vector_id),
+            self.space,
+        );
+        let mut stack: Vec<(usize, F)> = Vec::with_capacity(k);
+        while result.len() < k {
+            for i in 0..self.nodes[current_id].children.len() {
+                let child = &self.nodes[current_id].children[i];
+                let distance = if i > 0 {
+                    get_distance(q, self.get_vector(child.vector_id), self.space)
+                } else {
+                    current_distance
+                };
                 if self.nodes[current_id].is_leaf() {
-                    // todo add filter function here
                     result.push((self.swid_layer[child.vector_id], distance));
                 } else {
                     let i = match stack.binary_search_by(|a| {
@@ -425,14 +425,13 @@ impl<'a, F: Float + Debug> VPTree<'a, F> {
                         Ok(i) => i,
                         Err(i) => i,
                     };
-                    if stack.len() < self.ef_construction || i > stack.len() - self.ef_construction
-                    {
+                    if stack.len() < k || i > stack.len() - k {
                         stack.insert(i, (child.id.unwrap(), distance));
                     }
                 }
             }
-            current_id = match stack.pop() {
-                Some(x) => x.0,
+            (current_id, current_distance) = match stack.pop() {
+                Some(x) => x,
                 None => break,
             };
         }
@@ -468,7 +467,7 @@ impl<'a, F: Float + Debug> VPTree<'a, F> {
             }
             None => return Err(()),
         }
-        let mut new_tree = VPTree::new(self.ef_construction, self.space, self.dimensions, self.m);
+        let mut new_tree = VPTree::new(self.space, self.dimensions, self.m);
         self.swid_layer
             .iter()
             .zip(self.vector_layer.chunks(self.dimensions))
@@ -487,7 +486,7 @@ mod tests {
 
     #[test]
     fn test_vp_tree() {
-        let mut vptree = VPTree::<f64>::new(8, Distance::Euclidean, 2, 4);
+        let mut vptree = VPTree::<f64>::new(Distance::Euclidean, 2, 4);
         vptree.insert(&[3.0, 3.0], 4);
         vptree.insert(&[4.0, 4.0], 352);
         vptree.insert(&[5.0, 5.0], 43);
@@ -523,13 +522,13 @@ mod tests {
     #[test]
     fn test_10000() {
         use microbench::*;
-        let mut vptree = VPTree::<f32>::new(8, Distance::Euclidean, 2, 4);
+        let mut vptree = VPTree::<f32>::new(Distance::Euclidean, 2, 4);
         let bench_options = Options::default();
         microbench::bench(&bench_options, "vp_tree_test_insert_10000", || {
             for i in 0..10000 {
                 vptree.insert(&[i as f32, i as f32], i);
             }
-            vptree = VPTree::<f32>::new(8, Distance::Euclidean, 2, 4);
+            vptree = VPTree::<f32>::new(Distance::Euclidean, 2, 4);
         });
         for i in 0..10000 {
             vptree.insert(&[i as f32, i as f32], i);
