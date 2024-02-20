@@ -8,6 +8,7 @@ use std::{
 };
 type NodeID = usize;
 type Swid = u128;
+const M: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Distance {
@@ -106,7 +107,6 @@ pub enum Store<T> {
     Mmap((File, MmapMut)),
     Vec(Vec<T>),
 }
-
 #[derive(Debug)]
 pub struct VPTree<'a, F: Float + Debug> {
     pub nodes: Vec<Node<F>>,
@@ -116,7 +116,6 @@ pub struct VPTree<'a, F: Float + Debug> {
     pub vector_store: Store<F>,
     pub swid_store: Store<Swid>,
     space: Distance,
-    m: usize,
     top_node: Option<NodeID>,
 }
 #[derive(Copy, Clone, Debug, Default)]
@@ -137,7 +136,7 @@ impl<F: Float + Debug> Node<F> {
 }
 
 impl<'a, F: Float + Debug> VPTree<'a, F> {
-    pub fn new(space: Distance, dimensions: usize, m: usize) -> VPTree<'a, F> {
+    pub fn new(space: Distance, dimensions: usize) -> VPTree<'a, F> {
         VPTree {
             nodes: Vec::new(),
             dimensions,
@@ -146,14 +145,12 @@ impl<'a, F: Float + Debug> VPTree<'a, F> {
             vector_store: Store::Vec(Vec::new()),
             swid_store: Store::Vec(Vec::new()),
             space,
-            m,
             top_node: None,
         }
     }
     pub fn new_with_store(
         space: Distance,
         dimensions: usize,
-        m: usize,
         vector_store: &Path,
         swid_store: &Path,
     ) -> VPTree<'a, F> {
@@ -191,7 +188,6 @@ impl<'a, F: Float + Debug> VPTree<'a, F> {
             vector_store: Store::Vec(Vec::new()),
             swid_store: Store::Vec(Vec::new()),
             space,
-            m,
             top_node: None,
         };
         swid_layer
@@ -331,7 +327,7 @@ impl<'a, F: Float + Debug> VPTree<'a, F> {
             None => {
                 self.top_node = Some(0);
                 self.nodes.push(Node {
-                    children: Vec::with_capacity(self.m + 1),
+                    children: Vec::with_capacity(M + 1),
                     parent: None,
                 });
                 self.push_child(0, vector_id, None);
@@ -340,7 +336,7 @@ impl<'a, F: Float + Debug> VPTree<'a, F> {
     }
     fn split(&mut self, id: NodeID) {
         let node = &mut self.nodes[id];
-        if node.children.len() <= self.m {
+        if node.children.len() <= M {
             return;
         }
         let new_node_id = self.nodes.len();
@@ -360,7 +356,7 @@ impl<'a, F: Float + Debug> VPTree<'a, F> {
                 self.space,
             );
             if distance < child.distance
-                || (distance == child.distance && new_node.children.len() < self.m / 2)
+                || (distance == child.distance && new_node.children.len() < M / 2)
             {
                 let mut new_child = self.nodes[id].children.remove(i);
                 new_child.distance = distance;
@@ -382,7 +378,7 @@ impl<'a, F: Float + Debug> VPTree<'a, F> {
         } else {
             let new_parent_id = self.nodes.len();
             self.nodes.push(Node {
-                children: Vec::with_capacity(self.m + 1),
+                children: Vec::with_capacity(M + 1),
                 parent: None,
             });
             self.push_child(
@@ -467,7 +463,7 @@ impl<'a, F: Float + Debug> VPTree<'a, F> {
             }
             None => return Err(()),
         }
-        let mut new_tree = VPTree::new(self.space, self.dimensions, self.m);
+        let mut new_tree = VPTree::new(self.space, self.dimensions);
         self.swid_layer
             .iter()
             .zip(self.vector_layer.chunks(self.dimensions))
@@ -486,7 +482,7 @@ mod tests {
 
     #[test]
     fn test_vp_tree() {
-        let mut vptree = VPTree::<f64>::new(Distance::Euclidean, 2, 4);
+        let mut vptree = VPTree::<f64>::new(Distance::Euclidean, 2);
         vptree.insert(&[3.0, 3.0], 4);
         vptree.insert(&[4.0, 4.0], 352);
         vptree.insert(&[5.0, 5.0], 43);
@@ -522,13 +518,13 @@ mod tests {
     #[test]
     fn test_10000() {
         use microbench::*;
-        let mut vptree = VPTree::<f32>::new(Distance::Euclidean, 2, 4);
+        let mut vptree = VPTree::<f32>::new(Distance::Euclidean, 2);
         let bench_options = Options::default();
         microbench::bench(&bench_options, "vp_tree_test_insert_10000", || {
             for i in 0..10000 {
                 vptree.insert(&[i as f32, i as f32], i);
             }
-            vptree = VPTree::<f32>::new(Distance::Euclidean, 2, 4);
+            vptree = VPTree::<f32>::new(Distance::Euclidean, 2);
         });
         for i in 0..10000 {
             vptree.insert(&[i as f32, i as f32], i);
