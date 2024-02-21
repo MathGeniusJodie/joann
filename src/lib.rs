@@ -560,44 +560,44 @@ mod tests {
         );
         //dbg!(&vptree);
     }
-
+    const BENCH_DIMENSIONS: usize = 300;
     #[test]
     fn test_10000() {
         use microbench::*;
-        let mut vptree = VPTree::<f32>::new(Distance::Euclidean, 300);
+        let mut vptree = VPTree::<f32>::new(Distance::Euclidean, BENCH_DIMENSIONS);
         let bench_options = Options::default();
         microbench::bench(&bench_options, "insert", || {
             for i in 0..10000 {
-                let vector = vec![i as f32; 300];
+                let vector = vec![i as f32; BENCH_DIMENSIONS];
                 vptree.insert(&vector, i);
             }
-            vptree = VPTree::<f32>::new(Distance::Euclidean, 300);
+            vptree = VPTree::<f32>::new(Distance::Euclidean, BENCH_DIMENSIONS);
         });
         for i in 0..10000 {
-            let vector = vec![i as f32; 300];
+            let vector = vec![i as f32; BENCH_DIMENSIONS];
             vptree.insert(&vector, i);
         }
         microbench::bench(&bench_options, "knn_topk1", || {
             for i in 0..10000 {
-                let vector = vec![i as f32; 300];
+                let vector = vec![i as f32; BENCH_DIMENSIONS];
                 vptree.knn(&vector, 1);
             }
         });
         microbench::bench(&bench_options, "knn_topk10", || {
             for i in 0..10000 {
-                let vector = vec![i as f32; 300];
+                let vector = vec![i as f32; BENCH_DIMENSIONS];
                 vptree.knn(&vector, 10);
             }
         });
         microbench::bench(&bench_options, "knn_topk100", || {
             for i in 0..10000 {
-                let vector = vec![i as f32; 300];
+                let vector = vec![i as f32; BENCH_DIMENSIONS];
                 vptree.knn(&vector, 100);
             }
         });
         microbench::bench(&bench_options, "knn_topk1000", || {
             for i in 0..10000 {
-                let vector = vec![i as f32; 300];
+                let vector = vec![i as f32; BENCH_DIMENSIONS];
                 vptree.knn(&vector, 1000);
             }
         });
