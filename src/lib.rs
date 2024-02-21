@@ -8,7 +8,6 @@ use std::{
 };
 type NodeID = usize;
 type Swid = u128;
-const M: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Distance {
@@ -126,58 +125,46 @@ pub struct Child<F: Float + Debug + Default> {
 }
 #[derive(Debug)]
 pub struct Node<F: Float + Debug + Default> {
-    children: [Child<F>; M + 1],
+    children: [Child<F>; 2],
     len: usize,
 }
 impl<F: Float + Debug + Default> Default for Node<F> {
     fn default() -> Self {
         Node {
-            children: [Child::default(); M + 1],
+            children: [Child::default(); 2],
             len: 0,
         }
     }
 }
 impl<F: Float + Debug + Default> Node<F> {
-    pub fn is_leaf(&self) -> bool {
+    fn is_leaf(&self) -> bool {
         self.children.first().unwrap().id.is_none()
     }
-    pub fn first(&self) -> Option<&Child<F>> {
+    fn first(&self) -> Option<&Child<F>> {
         if self.len > 0 {
             Some(&self.children[0])
         } else {
             None
         }
     }
-    pub fn push(&mut self, child: Child<F>) {
+    fn push(&mut self, child: Child<F>) {
         self.children[self.len] = child;
         self.len += 1;
     }
-    pub fn iter(&self) -> std::slice::Iter<Child<F>> {
-        self.children[..self.len].iter()
-    }
-    pub fn get(&self, i: usize) -> Option<&Child<F>> {
+    fn get(&self, i: usize) -> Option<&Child<F>> {
         if i < self.len {
             self.children.get(i)
         } else {
             None
         }
     }
-    pub fn sort_by(&mut self, f: fn(&Child<F>, &Child<F>) -> std::cmp::Ordering) {
-        self.children[..self.len].sort_by(f);
-    }
-    pub fn pop(&mut self) -> Option<Child<F>> {
+    fn pop(&mut self) -> Option<Child<F>> {
         if self.len > 0 {
             self.len -= 1;
             Some(self.children[self.len])
         } else {
             None
         }
-    }
-    pub fn remove(&mut self, i: usize) -> Child<F> {
-        let child = self.children[i];
-        self.children[i..].rotate_left(1);
-        self.len -= 1;
-        child
     }
 }
 
@@ -257,51 +244,35 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
     fn get_closest_leaf(&self, q: &[F]) -> Option<Vec<NodeID>> {
         self.top_node?;
         let mut current_node = self.top_node.unwrap();
+        let mut current_distance = get_distance(
+            q,
+            self.get_vector(self.nodes[current_node].first().unwrap().vector_id),
+            self.space,
+        );
         let mut parent_chain = vec![current_node];
         loop {
             if self.nodes[current_node].is_leaf() {
                 return Some(parent_chain);
             }
-            current_node = self.nodes[current_node]
-                .iter()
-                .map(|child| {
+            (current_distance, current_node) = match self.nodes[current_node].get(1) {
+                Some(child) => {
                     let distance = get_distance(q, self.get_vector(child.vector_id), self.space);
-                    (distance, child.id.unwrap())
-                })
-                .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
-                .unwrap()
-                .1;
+                    if distance < current_distance {
+                        (distance, child.id.unwrap())
+                    } else {
+                        (
+                            current_distance,
+                            self.nodes[current_node].first().unwrap().id.unwrap(),
+                        )
+                    }
+                }
+                None => {
+                    let child = self.nodes[current_node].first().unwrap();
+                    (current_distance, child.id.unwrap())
+                }
+            };
             parent_chain.push(current_node);
         }
-    }
-    fn push_child(&mut self, leaf_id: NodeID, vector_id: NodeID, id: Option<NodeID>) {
-        if self.nodes[leaf_id].first().is_none() {
-            self.nodes[leaf_id].push(Child {
-                distance: F::zero(),
-                vector_id,
-                id,
-            });
-            return;
-        }
-        let center_id = self.nodes[leaf_id].first().unwrap().vector_id;
-        let distance = get_distance(
-            self.get_vector(vector_id),
-            self.get_vector(center_id),
-            self.space,
-        );
-        self.nodes[leaf_id].push(Child {
-            distance,
-            vector_id,
-            id,
-        });
-    }
-    fn push_child_sorted(&mut self, leaf_id: NodeID, vector_id: NodeID, id: Option<NodeID>) {
-        self.push_child(leaf_id, vector_id, id);
-        self.nodes[leaf_id].sort_by(|a, b| {
-            a.distance
-                .partial_cmp(&b.distance)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
     }
     fn resize(&mut self, n: isize) {
         let new_len = if n > 0 {
@@ -368,64 +339,95 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
         let closest_leaf = self.get_closest_leaf(q);
         match closest_leaf {
             Some(leaf_chain) => {
-                self.push_child_sorted(*leaf_chain.last().unwrap(), vector_id, None);
-                self.split(leaf_chain);
+                self.push_child(vector_id, None, leaf_chain);
             }
             None => {
                 self.top_node = Some(0);
-                self.nodes.push(Node::default());
-                self.push_child(0, vector_id, None);
+                self.nodes.push(Node {
+                    children: [
+                        Child {
+                            distance: F::zero(),
+                            vector_id,
+                            id: None,
+                        },
+                        Child::default(),
+                    ],
+                    len: 1,
+                });
             }
         }
     }
-    fn split(&mut self, mut chain: Vec<NodeID>) {
+    fn push_child(&mut self, vector_id: NodeID, new_id: Option<NodeID>, mut chain: Vec<NodeID>) {
         let id = chain.pop().unwrap();
-        let node = &mut self.nodes[id];
-        if node.len <= M {
+        let center_id = self.nodes[id].first().unwrap().vector_id;
+        let distance = get_distance(
+            self.get_vector(vector_id),
+            self.get_vector(center_id),
+            self.space,
+        );
+        if self.nodes[id].len == 1 {
+            self.nodes[id].push(Child {
+                distance,
+                vector_id,
+                id: new_id,
+            });
             return;
         }
+        let mut new_center = if distance > self.nodes[id].get(1).unwrap().distance {
+            Child {
+                distance,
+                vector_id,
+                id: new_id,
+            }
+        } else {
+            let new_center = self.nodes[id].pop().unwrap();
+            self.nodes[id].push(Child {
+                distance,
+                vector_id,
+                id: new_id,
+            });
+            new_center
+        };
+        //
         let new_node_id = self.nodes.len();
-        let mut new_center = self.nodes[id].pop().unwrap();
+        let old_distance = new_center.distance;
         new_center.distance = F::zero();
         let mut new_node = Node::default();
         new_node.push(new_center);
-        //put children the closest to the center of the two nodes
-        let mut i = 1;
-        while i < self.nodes[id].len {
-            let child = self.nodes[id].get(i).unwrap();
-            let distance = get_distance(
-                self.get_vector(child.vector_id),
-                self.get_vector(new_center.vector_id),
-                self.space,
-            );
-            if distance < child.distance{// || (distance == child.distance && new_node.len < M / 2) {
-                let mut new_child = self.nodes[id].remove(i);
-                new_child.distance = distance;
-                new_node.push(new_child);
-            } else {
-                i += 1;
-            }
+        //put child in new node if it is closer to new center
+        let child = self.nodes[id].get(1).unwrap();
+        let distance = get_distance(
+            self.get_vector(child.vector_id),
+            self.get_vector(new_center.vector_id),
+            self.space,
+        );
+        if distance < child.distance {
+            let mut new_child = self.nodes[id].pop().unwrap();
+            new_child.distance = distance;
+            new_node.push(new_child);
         }
-        /* 
-        self.nodes[id].sort_by(|a, b| {
-            a.distance
-                .partial_cmp(&b.distance)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });*/
         self.nodes.push(new_node);
-        if chain.last().is_some() { // if there is a parent
-            let parent_id = *chain.last().unwrap();
-            self.push_child_sorted(parent_id, new_center.vector_id, Some(new_node_id));
-            self.split(chain);
+        if chain.last().is_some() {
+            // if there is a parent
+            self.push_child(new_center.vector_id, Some(new_node_id), chain);
         } else {
             let new_parent_id = self.nodes.len();
-            self.nodes.push(Node::default());
-            self.push_child(
-                new_parent_id,
-                self.nodes[id].first().unwrap().vector_id,
-                Some(id),
-            );
-            self.push_child(new_parent_id, new_center.vector_id, Some(new_node_id));
+            let vector_id = self.nodes[id].first().unwrap().vector_id;
+            self.nodes.push(Node {
+                children: [
+                    Child {
+                        distance: F::zero(),
+                        vector_id,
+                        id: Some(id),
+                    },
+                    Child {
+                        distance: old_distance,
+                        vector_id: new_center.vector_id,
+                        id: Some(new_node_id),
+                    },
+                ],
+                len: 2,
+            });
             self.top_node = Some(new_parent_id);
         }
     }
