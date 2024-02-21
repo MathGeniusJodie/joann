@@ -118,53 +118,44 @@ pub struct VPTree<'a, F: Float + Debug + Default> {
     top_node: Option<NodeID>,
 }
 #[derive(Copy, Clone, Debug, Default)]
-pub struct Child<F: Float + Debug + Default> {
-    distance: F,
+pub struct Child {
     vector_id: NodeID,
     id: Option<NodeID>,
 }
 #[derive(Debug)]
 pub struct Node<F: Float + Debug + Default> {
-    children: [Child<F>; 2],
-    len: usize,
-}
-impl<F: Float + Debug + Default> Default for Node<F> {
-    fn default() -> Self {
-        Node {
-            children: [Child::default(); 2],
-            len: 0,
-        }
-    }
+    children: [Child; 2],
+    distance: Option<F>,
 }
 impl<F: Float + Debug + Default> Node<F> {
     fn is_leaf(&self) -> bool {
         self.children.first().unwrap().id.is_none()
     }
-    fn first(&self) -> Option<&Child<F>> {
-        if self.len > 0 {
-            Some(&self.children[0])
-        } else {
-            None
+    fn len(&self) -> usize {
+        match self.distance {
+            Some(_) => 2,
+            None => 1,
         }
     }
-    fn push(&mut self, child: Child<F>) {
-        self.children[self.len] = child;
-        self.len += 1;
+    fn first(&self) -> &Child {
+        &self.children[0]
     }
-    fn get(&self, i: usize) -> Option<&Child<F>> {
-        if i < self.len {
+    fn push(&mut self, child: Child, distance: F) {
+        assert!(self.distance.is_none());
+        self.children[1] = child;
+        self.distance = Some(distance);
+    }
+    fn get(&self, i: usize) -> Option<&Child> {
+        if i < self.len() {
             self.children.get(i)
         } else {
             None
         }
     }
-    fn pop(&mut self) -> Option<Child<F>> {
-        if self.len > 0 {
-            self.len -= 1;
-            Some(self.children[self.len])
-        } else {
-            None
-        }
+    fn pop(&mut self) -> Option<Child> {
+        assert!(self.len() == 2);
+        self.distance = None;
+        Some(self.children[1])
     }
 }
 
@@ -246,7 +237,7 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
         let mut current_node = self.top_node.unwrap();
         let mut current_distance = get_distance(
             q,
-            self.get_vector(self.nodes[current_node].first().unwrap().vector_id),
+            self.get_vector(self.nodes[current_node].first().vector_id),
             self.space,
         );
         let mut parent_chain = vec![current_node];
@@ -262,12 +253,12 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                     } else {
                         (
                             current_distance,
-                            self.nodes[current_node].first().unwrap().id.unwrap(),
+                            self.nodes[current_node].first().id.unwrap(),
                         )
                     }
                 }
                 None => {
-                    let child = self.nodes[current_node].first().unwrap();
+                    let child = self.nodes[current_node].first();
                     (current_distance, child.id.unwrap())
                 }
             };
@@ -336,54 +327,51 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                 self.nodes.push(Node {
                     children: [
                         Child {
-                            distance: F::zero(),
                             vector_id,
                             id: None,
                         },
                         Child::default(),
                     ],
-                    len: 1,
+                    distance: None,
                 });
             }
         }
     }
     fn push_child(&mut self, vector_id: NodeID, new_id: Option<NodeID>, mut chain: Vec<NodeID>) {
         let id = chain.pop().unwrap();
-        let center_id = self.nodes[id].first().unwrap().vector_id;
+        let center_id = self.nodes[id].first().vector_id;
         let distance = get_distance(
             self.get_vector(vector_id),
             self.get_vector(center_id),
             self.space,
         );
-        if self.nodes[id].len == 1 {
+        if self.nodes[id].distance.is_none() {
             self.nodes[id].push(Child {
-                distance,
                 vector_id,
                 id: new_id,
-            });
+            },distance);
             return;
         }
-        let mut new_center = if distance > self.nodes[id].get(1).unwrap().distance {
+        let old_distance = self.nodes[id].distance.unwrap();
+        let new_center = if distance > self.nodes[id].distance.unwrap() {
             Child {
-                distance,
                 vector_id,
                 id: new_id,
             }
         } else {
             let new_center = self.nodes[id].pop().unwrap();
             self.nodes[id].push(Child {
-                distance,
                 vector_id,
                 id: new_id,
-            });
+            }, distance);
             new_center
         };
         //
         let new_node_id = self.nodes.len();
-        let old_distance = new_center.distance;
-        new_center.distance = F::zero();
-        let mut new_node = Node::default();
-        new_node.push(new_center);
+        let mut new_node = Node{
+            children: [new_center, Child::default()],
+            distance: None,
+        };
         //put child in new node if it is closer to new center
         let child = self.nodes[id].get(1).unwrap();
         let distance = get_distance(
@@ -391,10 +379,9 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
             self.get_vector(new_center.vector_id),
             self.space,
         );
-        if distance < child.distance {
-            let mut new_child = self.nodes[id].pop().unwrap();
-            new_child.distance = distance;
-            new_node.push(new_child);
+        if distance < self.nodes[id].distance.unwrap() {
+            let new_child = self.nodes[id].pop().unwrap();
+            new_node.push(new_child,distance);
         }
         self.nodes.push(new_node);
         if chain.last().is_some() {
@@ -402,21 +389,19 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
             self.push_child(new_center.vector_id, Some(new_node_id), chain);
         } else {
             let new_parent_id = self.nodes.len();
-            let vector_id = self.nodes[id].first().unwrap().vector_id;
+            let vector_id = self.nodes[id].first().vector_id;
             self.nodes.push(Node {
                 children: [
                     Child {
-                        distance: F::zero(),
                         vector_id,
                         id: Some(id),
                     },
                     Child {
-                        distance: old_distance,
                         vector_id: new_center.vector_id,
                         id: Some(new_node_id),
                     },
                 ],
-                len: 2,
+                distance: Some(old_distance)
             });
             self.top_node = Some(new_parent_id);
         }
@@ -434,12 +419,12 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
         let mut current_id = self.top_node.unwrap();
         let mut current_distance = get_distance(
             q,
-            self.get_vector(self.nodes[current_id].first().unwrap().vector_id),
+            self.get_vector(self.nodes[current_id].first().vector_id),
             self.space,
         );
         let mut stack: Vec<(usize, F)> = Vec::with_capacity(k);
         while result.len() < k {
-            for i in 0..self.nodes[current_id].len {
+            for i in 0..self.nodes[current_id].len() {
                 let child = self.nodes[current_id].get(i).unwrap();
                 let distance = if i > 0 {
                     get_distance(q, self.get_vector(child.vector_id), self.space)
