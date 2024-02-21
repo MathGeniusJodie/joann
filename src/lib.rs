@@ -406,13 +406,14 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                 i += 1;
             }
         }
+        /* 
         self.nodes[id].sort_by(|a, b| {
             a.distance
                 .partial_cmp(&b.distance)
                 .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        });*/
         self.nodes.push(new_node);
-        if chain.last().is_some() {
+        if chain.last().is_some() { // if there is a parent
             let parent_id = *chain.last().unwrap();
             self.push_child_sorted(parent_id, new_center.vector_id, Some(new_node_id));
             self.split(chain);
