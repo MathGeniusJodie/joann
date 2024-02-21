@@ -390,7 +390,7 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
         let mut new_node = Node::default();
         new_node.push(new_center);
         //put children the closest to the center of the two nodes
-        let mut i = 0;
+        let mut i = 1;
         while i < self.nodes[id].len {
             let child = &self.nodes[id].get(i).unwrap();
             let distance = get_distance(
@@ -459,19 +459,10 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                         result.push(tuple);
                     }
                 } else {
-                    let i = match stack.binary_search_by(|a| {
-                        distance
-                            .partial_cmp(&a.1)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    }) {
-                        Ok(i) => i,
-                        Err(i) => i,
-                    };
-                    if stack.len() < k || i > stack.len() - k {
-                        stack.insert(i, (child.id.unwrap(), distance));
-                    }
+                    stack.push((child.id.unwrap(), distance));
                 }
             }
+            stack.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             (current_id, current_distance) = match stack.pop() {
                 Some(x) => x,
                 None => break,
@@ -583,6 +574,7 @@ mod tests {
                 vptree.knn(&vector, 1);
             }
         });
+        /*
         microbench::bench(&bench_options, "knn_topk10", || {
             for i in 0..10000 {
                 let vector = vec![i as f32; BENCH_DIMENSIONS];
@@ -600,6 +592,6 @@ mod tests {
                 let vector = vec![i as f32; BENCH_DIMENSIONS];
                 vptree.knn(&vector, 1000);
             }
-        });
+        });*/
     }
 }
