@@ -282,6 +282,7 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
         };
         match self.vector_store {
             Store::Mmap((ref file, ref mut mmap)) => {
+                mmap.flush().unwrap();
                 let bytes = new_len * std::mem::size_of::<F>();
                 file.set_len(bytes as u64).unwrap();
 
@@ -303,6 +304,7 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
         };
         match self.swid_store {
             Store::Mmap((ref file, ref mut mmap)) => {
+                mmap.flush().unwrap();
                 let bytes = new_len * std::mem::size_of::<Swid>();
                 file.set_len(bytes as u64).unwrap();
                 *mmap = unsafe { MmapMut::map_mut(file).unwrap() };
@@ -324,18 +326,6 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
         self.swid_layer[swid_id] = swid;
         self.vector_layer[(vector_id * self.dimensions)..((vector_id + 1) * self.dimensions)]
             .copy_from_slice(q);
-        match &mut self.vector_store {
-            Store::Mmap((_file, mmap)) => {
-                mmap.flush().unwrap();
-            }
-            Store::Vec(_) => (),
-        };
-        match &mut self.swid_store {
-            Store::Mmap((_file, mmap)) => {
-                mmap.flush().unwrap();
-            }
-            Store::Vec(_) => (),
-        };
         let closest_leaf = self.get_closest_leaf(q);
         match closest_leaf {
             Some(leaf_chain) => {
