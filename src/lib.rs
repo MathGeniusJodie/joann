@@ -8,7 +8,7 @@ use std::{
 };
 type NodeID = usize;
 type Swid = u128;
-const M: usize = 4;
+const M: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Distance {
@@ -392,13 +392,13 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
         //put children the closest to the center of the two nodes
         let mut i = 1;
         while i < self.nodes[id].len {
-            let child = &self.nodes[id].get(i).unwrap();
+            let child = self.nodes[id].get(i).unwrap();
             let distance = get_distance(
                 self.get_vector(child.vector_id),
                 self.get_vector(new_center.vector_id),
                 self.space,
             );
-            if distance < child.distance || (distance == child.distance && new_node.len < M / 2) {
+            if distance < child.distance{// || (distance == child.distance && new_node.len < M / 2) {
                 let mut new_child = self.nodes[id].remove(i);
                 new_child.distance = distance;
                 new_node.push(new_child);
