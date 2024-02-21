@@ -447,7 +447,7 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
         let mut stack: Vec<(usize, F)> = Vec::with_capacity(k);
         while result.len() < k {
             for i in 0..self.nodes[current_id].len {
-                let child = &self.nodes[current_id].get(i).unwrap();
+                let child = self.nodes[current_id].get(i).unwrap();
                 let distance = if i > 0 {
                     get_distance(q, self.get_vector(child.vector_id), self.space)
                 } else {
@@ -574,7 +574,6 @@ mod tests {
                 vptree.knn(&vector, 1);
             }
         });
-        /*
         microbench::bench(&bench_options, "knn_topk10", || {
             for i in 0..10000 {
                 let vector = vec![i as f32; BENCH_DIMENSIONS];
@@ -592,6 +591,6 @@ mod tests {
                 let vector = vec![i as f32; BENCH_DIMENSIONS];
                 vptree.knn(&vector, 1000);
             }
-        });*/
+        });
     }
 }
