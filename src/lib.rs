@@ -477,18 +477,6 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                 self.swid_layer.swap(swid_id, last);
                 self.vector_layer[swid_id * self.dimensions..(swid_id + 1) * self.dimensions]
                     .swap_with_slice(last_vector.as_mut_slice());
-                match &mut self.vector_store {
-                    Store::Mmap((_file, mmap)) => {
-                        mmap.flush().unwrap();
-                    }
-                    Store::Vec(_) => (),
-                };
-                match &mut self.swid_store {
-                    Store::Mmap((_file, mmap)) => {
-                        mmap.flush().unwrap();
-                    }
-                    Store::Vec(_) => (),
-                };
                 self.resize(-1);
             }
             None => return Err(()),
