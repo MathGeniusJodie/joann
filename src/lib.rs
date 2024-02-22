@@ -170,14 +170,11 @@ pub enum Node<F: Float + Debug + Default> {
     Branch(Branch<F>),
     Leaf(Leaf<F>),
 }
-
 impl<F: Float + Debug + Default> Node<F> {
     fn len(&self) -> usize {
         match self {
-            Node::Branch(Branch::Single(_)) => 1,
-            Node::Branch(Branch::Double(_)) => 2,
-            Node::Leaf(Leaf::Single(_)) => 1,
-            Node::Leaf(Leaf::Double(_)) => 2,
+            Node::Branch(Branch::Single(_)) | Node::Leaf(Leaf::Single(_)) => 1,
+            Node::Branch(Branch::Double(_)) | Node::Leaf(Leaf::Double(_)) => 2,
         }
     }
     fn first(&self) -> Child {
@@ -193,32 +190,20 @@ impl<F: Float + Debug + Default> Node<F> {
     fn get(&self, i: usize) -> Option<Child> {
         match self {
             Node::Branch(Branch::Single(Single { children })) => {
-                if i == 0 {
-                    Some(Child::BranchChild(children[0]))
-                } else {
-                    None
-                }
+                let child = children.get(i)?;
+                Some(Child::BranchChild(*child))
             }
             Node::Branch(Branch::Double(Double { children, .. })) => {
-                if i < 2 {
-                    Some(Child::BranchChild(children[i]))
-                } else {
-                    None
-                }
+                let child = children.get(i)?;
+                Some(Child::BranchChild(*child))
             }
             Node::Leaf(Leaf::Single(Single { children })) => {
-                if i == 0 {
-                    Some(Child::LeafChild(children[0]))
-                } else {
-                    None
-                }
+                let child = children.get(i)?;
+                Some(Child::LeafChild(*child))
             }
             Node::Leaf(Leaf::Double(Double { children, .. })) => {
-                if i < 2 {
-                    Some(Child::LeafChild(children[i]))
-                } else {
-                    None
-                }
+                let child = children.get(i)?;
+                Some(Child::LeafChild(*child))
             }
         }
     }
@@ -485,9 +470,11 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
         };
         let new_center_id = self.nodes.len();
         self.nodes.push(match new_center {
-            Child::BranchChild(BranchChild { id, vector_id }) => Node::Branch(Branch::Single(Single {
-                children: [BranchChild { id, vector_id }],
-            })),
+            Child::BranchChild(BranchChild { id, vector_id }) => {
+                Node::Branch(Branch::Single(Single {
+                    children: [BranchChild { id, vector_id }],
+                }))
+            }
             Child::LeafChild(LeafChild { vector_id }) => Node::Leaf(Leaf::Single(Single {
                 children: [LeafChild { vector_id }],
             })),
@@ -625,7 +612,6 @@ mod tests {
                 (352, 4.0 * std::f64::consts::SQRT_2)
             ]
         );
-        
     }
     const BENCH_DIMENSIONS: usize = 300;
     #[test]
