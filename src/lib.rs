@@ -117,93 +117,83 @@ pub struct VPTree<'a, F: Float + Debug + Default> {
     space: Distance,
     top_node: Option<NodeID>,
 }
-
-#[derive(Debug, Clone, Copy)]
-pub struct BranchChild {
-    vector_id: NodeID,
-    id: NodeID,
-}
-#[derive(Debug, Clone, Copy)]
-pub struct LeafChild {
-    vector_id: NodeID,
-}
 #[derive(Debug)]
 pub enum Child {
-    BranchChild(BranchChild),
-    LeafChild(LeafChild),
+    BranchChild { vector_id: NodeID, id: NodeID },
+    LeafChild { vector_id: NodeID },
 }
 impl Child {
     fn vector_id(&self) -> NodeID {
         match self {
-            Child::BranchChild(BranchChild { vector_id, .. }) => *vector_id,
-            Child::LeafChild(LeafChild { vector_id }) => *vector_id,
+            Child::BranchChild { vector_id, .. } | Child::LeafChild { vector_id, .. } => *vector_id,
         }
     }
     fn id(&self) -> Option<NodeID> {
         match self {
-            Child::BranchChild(BranchChild { id, .. }) => Some(*id),
-            Child::LeafChild(_) => None,
+            Child::BranchChild { vector_id: _, id } => Some(*id),
+            Child::LeafChild { vector_id: _ } => None,
         }
     }
 }
 #[derive(Debug)]
-pub struct Single<T> {
-    children: [T; 1],
-}
-#[derive(Debug)]
-pub struct Double<T, F: Float + Debug + Default> {
-    children: [T; 2],
-    distance: F,
-}
-#[derive(Debug)]
-pub enum Branch<F: Float + Debug + Default> {
-    Single(Single<BranchChild>),
-    Double(Double<BranchChild, F>),
-}
-#[derive(Debug)]
-pub enum Leaf<F: Float + Debug + Default> {
-    Single(Single<LeafChild>),
-    Double(Double<LeafChild, F>),
-}
-#[derive(Debug)]
 pub enum Node<F: Float + Debug + Default> {
-    Branch(Branch<F>),
-    Leaf(Leaf<F>),
+    Branch1 {
+        children: [(NodeID, NodeID); 1],
+    },
+    Branch2 {
+        children: [(NodeID, NodeID); 2],
+        distance: F,
+    },
+    Leaf1 {
+        children: [NodeID; 1],
+    },
+    Leaf2 {
+        children: [NodeID; 2],
+        distance: F,
+    },
 }
 impl<F: Float + Debug + Default> Node<F> {
     fn len(&self) -> usize {
         match self {
-            Node::Branch(Branch::Single(_)) | Node::Leaf(Leaf::Single(_)) => 1,
-            Node::Branch(Branch::Double(_)) | Node::Leaf(Leaf::Double(_)) => 2,
+            Node::Branch1 { .. } | Node::Leaf1 { .. } => 1,
+            Node::Branch2 { .. } | Node::Leaf2 { .. } => 2,
         }
     }
     fn first(&self) -> Child {
         match self {
-            Node::Branch(Branch::Single(Single { children })) => Child::BranchChild(children[0]),
-            Node::Branch(Branch::Double(Double { children, .. })) => {
-                Child::BranchChild(children[0])
-            }
-            Node::Leaf(Leaf::Single(Single { children })) => Child::LeafChild(children[0]),
-            Node::Leaf(Leaf::Double(Double { children, .. })) => Child::LeafChild(children[0]),
+            Node::Branch1 { children, .. } => Child::BranchChild {
+                vector_id: children[0].0,
+                id: children[0].1,
+            },
+            Node::Branch2 { children, .. } => Child::BranchChild {
+                vector_id: children[0].0,
+                id: children[0].1,
+            },
+            Node::Leaf1 { children, .. } => Child::LeafChild {
+                vector_id: children[0],
+            },
+            Node::Leaf2 { children, .. } => Child::LeafChild {
+                vector_id: children[0],
+            },
         }
     }
     fn get(&self, i: usize) -> Option<Child> {
         match self {
-            Node::Branch(Branch::Single(Single { children })) => {
-                let child = children.get(i)?;
-                Some(Child::BranchChild(*child))
+            Node::Branch1 { children } => {
+                let (vector_id, id) = children.get(i).copied()?;
+                Some(Child::BranchChild { vector_id, id })
             }
-            Node::Branch(Branch::Double(Double { children, .. })) => {
-                let child = children.get(i)?;
-                Some(Child::BranchChild(*child))
+            Node::Branch2 { children, .. } => {
+                let (vector_id, id) = children.get(i).copied()?;
+                Some(Child::BranchChild { vector_id, id })
             }
-            Node::Leaf(Leaf::Single(Single { children })) => {
-                let child = children.get(i)?;
-                Some(Child::LeafChild(*child))
+            Node::Leaf1 { children } => {
+                let vector_id = children.get(i).copied()?;
+                Some(Child::LeafChild { vector_id })
             }
-            Node::Leaf(Leaf::Double(Double { children, .. })) => {
-                let child = children.get(i)?;
-                Some(Child::LeafChild(*child))
+            Node::Leaf2 { children, .. } => {
+                let vector_id = children.get(i).copied()?;
+                Some(Child::LeafChild { vector_id })
             }
         }
     }
@@ -293,8 +283,8 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
         let mut parent_chain = vec![current_node];
         loop {
             match self.nodes[current_node] {
-                Node::Leaf(_) => return Some(parent_chain),
-                Node::Branch(_) => {}
+                Node::Leaf1 { .. } | Node::Leaf2 { .. } => return Some(parent_chain),
+                _ => {}
             }
             (current_distance, current_node) = match self.nodes[current_node].get(1) {
                 Some(child) => {
@@ -375,9 +365,9 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
             }
             None => {
                 self.top_node = Some(0);
-                self.nodes.push(Node::Leaf(Leaf::Single(Single {
-                    children: [LeafChild { vector_id }],
-                })));
+                self.nodes.push(Node::Leaf1 {
+                    children: [vector_id],
+                })
             }
         }
     }
@@ -394,106 +384,87 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
             self.space,
         );
         let (new_distance, new_center) = match self.nodes[id] {
-            Node::Leaf(Leaf::Single(Single { children })) => {
-                self.nodes[id] = Node::Leaf(Leaf::Double(Double {
-                    children: [
-                        children[0],
-                        LeafChild {
-                            vector_id: new_vector_id,
-                        },
-                    ],
+            Node::Leaf1 { children } => {
+                self.nodes[id] = Node::Leaf2 {
+                    children: [children[0], new_vector_id],
                     distance: new_child_distance,
-                }));
+                };
                 return;
             }
-            Node::Branch(Branch::Single(Single { children })) => {
-                self.nodes[id] = Node::Branch(Branch::Double(Double {
-                    children: [
-                        children[0],
-                        BranchChild {
-                            vector_id: new_vector_id,
-                            id: new_id.unwrap(),
-                        },
-                    ],
+            Node::Branch1 { children } => {
+                self.nodes[id] = Node::Branch2 {
+                    children: [children[0], (new_vector_id, new_id.unwrap())],
                     distance: new_child_distance,
-                }));
+                };
                 return;
             }
-            Node::Leaf(Leaf::Double(Double { children, distance })) => {
+            Node::Leaf2 { children, distance } => {
                 let (new_distance, new_center) = if new_child_distance < distance {
                     let old_child = children[1];
-                    self.nodes[id] = Node::Leaf(Leaf::Double(Double {
-                        children: [
-                            children[0],
-                            LeafChild {
-                                vector_id: new_vector_id,
-                            },
-                        ],
+                    self.nodes[id] = Node::Leaf2 {
+                        children: [children[0], new_vector_id],
                         distance: new_child_distance,
-                    }));
-                    (distance, old_child)
+                    };
+                    (
+                        distance,
+                        Child::LeafChild {
+                            vector_id: old_child,
+                        },
+                    )
                 } else {
                     (
                         new_child_distance,
-                        LeafChild {
+                        Child::LeafChild {
                             vector_id: new_vector_id,
                         },
                     )
                 };
-                (new_distance, Child::LeafChild(new_center))
+                (new_distance, new_center)
             }
-            Node::Branch(Branch::Double(Double { children, distance })) => {
+            Node::Branch2 { children, distance } => {
                 let (new_distance, new_center) = if new_child_distance < distance {
                     let old_child = children[1];
-                    self.nodes[id] = Node::Branch(Branch::Double(Double {
-                        children: [
-                            children[0],
-                            BranchChild {
-                                vector_id: new_vector_id,
-                                id: new_id.unwrap(),
-                            },
-                        ],
+                    self.nodes[id] = Node::Branch2 {
+                        children: [children[0], (new_vector_id, new_id.unwrap())],
                         distance: new_child_distance,
-                    }));
-                    (distance, old_child)
+                    };
+                    (
+                        distance,
+                        Child::BranchChild {
+                            vector_id: old_child.0,
+                            id: old_child.1,
+                        },
+                    )
                 } else {
                     (
                         new_child_distance,
-                        BranchChild {
+                        Child::BranchChild {
                             vector_id: new_vector_id,
                             id: new_id.unwrap(),
                         },
                     )
                 };
-                (new_distance, Child::BranchChild(new_center))
+                (new_distance, new_center)
             }
         };
         let new_center_id = self.nodes.len();
         self.nodes.push(match new_center {
-            Child::BranchChild(BranchChild { id, vector_id }) => {
-                Node::Branch(Branch::Single(Single {
-                    children: [BranchChild { id, vector_id }],
-                }))
-            }
-            Child::LeafChild(LeafChild { vector_id }) => Node::Leaf(Leaf::Single(Single {
-                children: [LeafChild { vector_id }],
-            })),
+            Child::BranchChild { vector_id, id } => Node::Branch1 {
+                children: [(vector_id, id)],
+            },
+            Child::LeafChild { vector_id } => Node::Leaf1 {
+                children: [vector_id],
+            },
         });
         if chain.is_empty() {
             let new_parent_id = self.nodes.len();
-            self.nodes.push(Node::Branch(Branch::Double(Double {
+            self.nodes.push(Node::Branch2 {
                 children: [
-                    BranchChild {
-                        vector_id: self.nodes[id].first().vector_id(),
-                        id,
-                    },
-                    BranchChild {
-                        vector_id: new_center.vector_id(),
-                        id: new_center_id,
-                    },
+                    (self.nodes[id].first().vector_id(), id),
+                    (new_center.vector_id(), new_center_id),
                 ],
                 distance: new_distance,
-            })));
+            });
             self.top_node = Some(new_parent_id);
         } else {
             self.push_child(new_center.vector_id(), Some(new_center_id), chain);
@@ -525,13 +496,13 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                     current_distance
                 };
                 match self.nodes[current_id] {
-                    Node::Leaf(_) => {
+                    Node::Leaf1 { .. } | Node::Leaf2 { .. } => {
                         let tuple = (self.swid_layer[child.vector_id()], distance);
                         if filter(tuple) {
                             result.push(tuple);
                         }
                     }
-                    Node::Branch(_) => {
+                    Node::Branch1 { .. } | Node::Branch2 { .. } => {
                         stack.push((child.id().unwrap(), distance));
                     }
                 }
