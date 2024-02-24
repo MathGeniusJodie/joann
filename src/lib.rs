@@ -433,35 +433,40 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
         );
         let mut stack: Vec<(usize, F)> = Vec::with_capacity(k);
         while result.len() < k {
-            {
-                match self.nodes[current_id] {
-                    Node::Leaf1 { left_vector, .. } | Node::Leaf2 { left_vector, .. } => {
-                        let tuple = (self.swid_layer[left_vector], current_distance);
-                        if filter(tuple) {
-                            result.push(tuple);
-                        }
-                    }
-                    Node::Branch1 { left_next, .. } | Node::Branch2 { left_next, .. } => {
-                        stack.push((left_next, current_distance));
+            match self.nodes[current_id] {
+                Node::Leaf1 { left_vector, .. } => {
+                    let tuple = (self.swid_layer[left_vector], current_distance);
+                    if filter(tuple) {
+                        result.push(tuple);
                     }
                 }
-                match self.nodes[current_id] {
-                    Node::Leaf2 { right_vector, .. } => {
-                        let distance = get_distance(q, self.get_vector(right_vector), self.space);
-                        let tuple = (self.swid_layer[right_vector], distance);
-                        if filter(tuple) {
-                            result.push(tuple);
-                        }
+                Node::Branch1 { left_next, .. } => {
+                    stack.push((left_next, current_distance));
+                }
+                Node::Leaf2 {
+                    right_vector,
+                    left_vector,
+                    ..
+                } => {
+                    let distance = get_distance(q, self.get_vector(right_vector), self.space);
+                    let tuple = (self.swid_layer[right_vector], distance);
+                    if filter(tuple) {
+                        result.push(tuple);
                     }
-                    Node::Branch2 {
-                        right_next,
-                        right_vector,
-                        ..
-                    } => {
-                        let distance = get_distance(q, self.get_vector(right_vector), self.space);
-                        stack.push((right_next, distance));
+                    let tuple = (self.swid_layer[left_vector], current_distance);
+                    if filter(tuple) {
+                        result.push(tuple);
                     }
-                    _ => {}
+                }
+                Node::Branch2 {
+                    left_next,
+                    right_next,
+                    right_vector,
+                    ..
+                } => {
+                    let distance = get_distance(q, self.get_vector(right_vector), self.space);
+                    stack.push((left_next, current_distance));
+                    stack.push((right_next, distance));
                 }
             }
             stack.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
