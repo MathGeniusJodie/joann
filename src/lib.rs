@@ -143,8 +143,10 @@ pub enum Node<F: Float + Debug + Default> {
 impl<F: Float + Debug + Default> Node<F> {
     fn vector(&self) -> NodeID {
         match self {
-            Node::Branch1 { left_vector, .. } | Node::Branch2 { left_vector, .. } => *left_vector,
-            Node::Leaf1 { left_vector, .. } | Node::Leaf2 { left_vector, .. } => *left_vector,
+            Node::Branch1 { left_vector, .. }
+            | Node::Branch2 { left_vector, .. }
+            | Node::Leaf1 { left_vector, .. }
+            | Node::Leaf2 { left_vector, .. } => *left_vector,
         }
     }
 }
@@ -239,14 +241,14 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                     right_vector,
                     right_next,
                     ..
-                } => {
-                    let distance = get_distance(q, self.get_vector(right_vector), self.space);
-                    if distance < current_distance {
-                        (distance, right_next)
-                    } else {
-                        (current_distance, left_next)
-                    }
-                }
+                } => std::cmp::min_by(
+                    (
+                        get_distance(q, self.get_vector(right_vector), self.space),
+                        right_next,
+                    ),
+                    (current_distance, left_next),
+                    |a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal),
+                ),
                 Node::Branch1 { left_next, .. } => (current_distance, left_next),
             };
             parent_chain.push(current_node);
@@ -329,7 +331,7 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
             self.get_vector(new_vector_id),
             self.space,
         );
-        let (new_distance, new_center, foobar) = match self.nodes[id] {
+        let (new_distance, new_center, new_center_next) = match self.nodes[id] {
             Node::Leaf1 { left_vector } => {
                 self.nodes[id] = Node::Leaf2 {
                     left_vector,
@@ -357,13 +359,12 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                 distance,
             } => {
                 if new_child_distance < distance {
-                    let old_vector_id = right_vector;
                     self.nodes[id] = Node::Leaf2 {
                         left_vector,
                         right_vector: new_vector_id,
                         distance: new_child_distance,
                     };
-                    (distance, old_vector_id, None)
+                    (distance, right_vector, None)
                 } else {
                     (new_child_distance, new_vector_id, None)
                 }
@@ -376,8 +377,6 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                 distance,
             } => {
                 if new_child_distance < distance {
-                    let old_vector_id = right_vector;
-                    let old_next_id = right_next;
                     self.nodes[id] = Node::Branch2 {
                         left_vector,
                         left_next,
@@ -385,7 +384,7 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                         right_next: new_id.unwrap(),
                         distance: new_child_distance,
                     };
-                    (distance, old_vector_id, Some(old_next_id))
+                    (distance, right_vector, Some(right_next))
                 } else {
                     (new_child_distance, new_vector_id, new_id)
                 }
@@ -393,13 +392,14 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
         };
         let new_center_id = self.nodes.len();
         self.nodes.push(match self.nodes[id] {
-            Node::Branch2 { .. } | Node::Branch1 { .. } => Node::Branch1 {
+            Node::Branch2 { .. } => Node::Branch1 {
                 left_vector: new_center,
-                left_next: foobar.unwrap(),
+                left_next: new_center_next.unwrap(),
             },
-            Node::Leaf1 { .. } | Node::Leaf2 { .. } => Node::Leaf1 {
+            Node::Leaf2 { .. } => Node::Leaf1 {
                 left_vector: new_center,
             },
+            _ => unreachable!(),
         });
         if chain.is_empty() {
             let new_parent_id = self.nodes.len();
