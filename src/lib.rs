@@ -446,12 +446,12 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                     left_vector,
                     ..
                 } => {
-                    let distance = get_distance(q, self.get_vector(right_vector), self.space);
-                    let tuple = (self.swid_layer[right_vector], distance);
+                    let tuple = (self.swid_layer[left_vector], current_distance);
                     if filter(tuple) {
                         result.push(tuple);
                     }
-                    let tuple = (self.swid_layer[left_vector], current_distance);
+                    let distance = get_distance(q, self.get_vector(right_vector), self.space);
+                    let tuple = (self.swid_layer[right_vector], distance);
                     if filter(tuple) {
                         result.push(tuple);
                     }
@@ -462,8 +462,8 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                     right_vector,
                     ..
                 } => {
-                    let distance = get_distance(q, self.get_vector(right_vector), self.space);
                     stack.push((left_next, current_distance));
+                    let distance = get_distance(q, self.get_vector(right_vector), self.space);
                     stack.push((right_next, distance));
                 }
             }
