@@ -16,8 +16,6 @@ pub enum Distance {
     L2,
     IP,
 }
-
-#[inline(never)]
 fn get_distance<F: Float + Debug + Default>(a: &[F], b: &[F], space: Distance) -> F {
     #[cfg(target_feature = "avx")]
     const STRIDE: usize = 8;
