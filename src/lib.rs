@@ -106,7 +106,7 @@ pub enum Store<T> {
 }
 #[derive(Debug)]
 pub struct VPTree<'a, F: Float + Debug + Default> {
-    pub nodes: Vec<Node<F>>,
+    pub nodes: Vec<Node>,
     pub dimensions: usize,
     pub vector_layer: &'a mut [F],
     pub swid_layer: &'a mut [Swid],
@@ -117,7 +117,7 @@ pub struct VPTree<'a, F: Float + Debug + Default> {
 }
 
 #[derive(Debug)]
-pub enum Node<F: Float + Debug + Default> {
+pub enum Node {
     Branch1 {
         left_vector: NodeID,
         left_next: NodeID,
@@ -127,7 +127,6 @@ pub enum Node<F: Float + Debug + Default> {
         left_next: NodeID,
         right_vector: NodeID,
         right_next: NodeID,
-        distance: F,
     },
     Leaf1 {
         left_vector: NodeID,
@@ -135,10 +134,9 @@ pub enum Node<F: Float + Debug + Default> {
     Leaf2 {
         left_vector: NodeID,
         right_vector: NodeID,
-        distance: F,
     },
 }
-impl<F: Float + Debug + Default> Node<F> {
+impl Node {
     fn vector(&self) -> NodeID {
         match self {
             Node::Branch1 { left_vector, .. }
@@ -329,12 +327,11 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
             self.get_vector(new_vector_id),
             self.space,
         );
-        let (new_distance, new_center, new_center_next) = match self.nodes[id] {
+        let (new_center, new_center_next) = match self.nodes[id] {
             Node::Leaf1 { left_vector } => {
                 self.nodes[id] = Node::Leaf2 {
                     left_vector,
                     right_vector: new_vector_id,
-                    distance: new_child_distance,
                 };
                 return;
             }
@@ -347,24 +344,26 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                     left_next,
                     right_vector: new_vector_id,
                     right_next: new_id.unwrap(),
-                    distance: new_child_distance,
                 };
                 return;
             }
             Node::Leaf2 {
                 left_vector,
                 right_vector,
-                distance,
             } => {
+                let distance = get_distance(
+                    self.get_vector(left_vector),
+                    self.get_vector(right_vector),
+                    self.space,
+                );
                 if new_child_distance < distance {
                     self.nodes[id] = Node::Leaf2 {
                         left_vector,
                         right_vector: new_vector_id,
-                        distance: new_child_distance,
                     };
-                    (distance, right_vector, None)
+                    (right_vector, None)
                 } else {
-                    (new_child_distance, new_vector_id, None)
+                    (new_vector_id, None)
                 }
             }
             Node::Branch2 {
@@ -372,19 +371,22 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                 left_next,
                 right_vector,
                 right_next,
-                distance,
             } => {
+                let distance = get_distance(
+                    self.get_vector(left_vector),
+                    self.get_vector(right_vector),
+                    self.space,
+                );
                 if new_child_distance < distance {
                     self.nodes[id] = Node::Branch2 {
                         left_vector,
                         left_next,
                         right_vector: new_vector_id,
                         right_next: new_id.unwrap(),
-                        distance: new_child_distance,
                     };
-                    (distance, right_vector, Some(right_next))
+                    (right_vector, Some(right_next))
                 } else {
-                    (new_child_distance, new_vector_id, new_id)
+                    (new_vector_id, new_id)
                 }
             }
         };
@@ -406,7 +408,6 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                 left_next: id,
                 right_vector: new_center,
                 right_next: new_center_id,
-                distance: new_distance,
             });
             self.top_node = Some(new_parent_id);
         } else {
