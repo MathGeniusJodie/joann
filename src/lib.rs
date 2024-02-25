@@ -119,12 +119,13 @@ pub struct VPTree<'a, F: Float + Debug + Default> {
 #[derive(Debug)]
 pub enum Node {
     Branch1 {
-        vector: NodeID,
+        left_vector: NodeID,
         left_next: NodeID,
     },
     Branch2 {
-        vector: NodeID,
+        left_vector: NodeID,
         left_next: NodeID,
+        right_vector: NodeID,
         right_next: NodeID,
     },
     Leaf1 {
@@ -138,8 +139,10 @@ pub enum Node {
 impl Node {
     fn vector(&self) -> NodeID {
         match self {
-            Node::Branch1 { vector, .. } | Node::Branch2 { vector, .. } => *vector,
-            Node::Leaf1 { left_vector, .. } | Node::Leaf2 { left_vector, .. } => *left_vector,
+            Node::Branch1 { left_vector, .. }
+            | Node::Branch2 { left_vector, .. }
+            | Node::Leaf1 { left_vector, .. }
+            | Node::Leaf2 { left_vector, .. } => *left_vector,
         }
     }
 }
@@ -231,15 +234,12 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                 Node::Leaf1 { .. } | Node::Leaf2 { .. } => return Some(parent_chain),
                 Node::Branch2 {
                     left_next,
+                    right_vector,
                     right_next,
                     ..
                 } => std::cmp::min_by(
                     (
-                        get_distance(
-                            q,
-                            self.get_vector(self.nodes[right_next].vector()),
-                            self.space,
-                        ),
+                        get_distance(q, self.get_vector(right_vector), self.space),
                         right_next,
                     ),
                     (current_distance, left_next),
@@ -335,10 +335,14 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                 };
                 return;
             }
-            Node::Branch1 { vector, left_next } => {
+            Node::Branch1 {
+                left_vector,
+                left_next,
+            } => {
                 self.nodes[id] = Node::Branch2 {
-                    vector,
+                    left_vector,
                     left_next,
+                    right_vector: new_vector_id,
                     right_next: new_id.unwrap(),
                 };
                 return;
@@ -363,20 +367,21 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                 }
             }
             Node::Branch2 {
-                vector,
+                left_vector,
                 left_next,
+                right_vector,
                 right_next,
             } => {
-                let right_vector = self.nodes[right_next].vector();
                 let distance = get_distance(
-                    self.get_vector(vector),
+                    self.get_vector(left_vector),
                     self.get_vector(right_vector),
                     self.space,
                 );
                 if new_child_distance < distance {
                     self.nodes[id] = Node::Branch2 {
-                        vector,
+                        left_vector,
                         left_next,
+                        right_vector: new_vector_id,
                         right_next: new_id.unwrap(),
                     };
                     (right_vector, Some(right_next))
@@ -388,7 +393,7 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
         let new_center_id = self.nodes.len();
         self.nodes.push(match self.nodes[id] {
             Node::Branch2 { .. } => Node::Branch1 {
-                vector: new_center,
+                left_vector: new_center,
                 left_next: new_center_next.unwrap(),
             },
             Node::Leaf2 { .. } => Node::Leaf1 {
@@ -399,8 +404,9 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
         if chain.is_empty() {
             let new_parent_id = self.nodes.len();
             self.nodes.push(Node::Branch2 {
-                vector: self.nodes[id].vector(),
+                left_vector: self.nodes[id].vector(),
                 left_next: id,
+                right_vector: new_center,
                 right_next: new_center_id,
             });
             self.top_node = Some(new_parent_id);
@@ -454,14 +460,11 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                 Node::Branch2 {
                     left_next,
                     right_next,
+                    right_vector,
                     ..
                 } => {
                     stack.push((left_next, current_distance));
-                    let distance = get_distance(
-                        q,
-                        self.get_vector(self.nodes[right_next].vector()),
-                        self.space,
-                    );
+                    let distance = get_distance(q, self.get_vector(right_vector), self.space);
                     stack.push((right_next, distance));
                 }
             }
