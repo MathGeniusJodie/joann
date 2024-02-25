@@ -100,16 +100,52 @@ fn get_distance<F: Float + Debug + Default>(a: &[F], b: &[F], space: Distance) -
 }
 
 #[derive(Debug)]
-pub enum Store<T> {
+pub enum Store<T: Default + Clone> {
     Mmap((File, MmapMut)),
     Vec(Vec<T>),
 }
+impl<T: Default + Clone> Store<T> {
+    pub fn slice_mut(&mut self) -> &mut [T] {
+        match self {
+            Store::Mmap((_, mmap)) => unsafe {
+                std::slice::from_raw_parts_mut(
+                    mmap.as_mut_ptr() as *mut T,
+                    mmap.len() / std::mem::size_of::<T>(),
+                )
+            },
+            Store::Vec(vec) => vec.as_mut_slice(),
+        }
+    }
+    pub fn slice(&self) -> &[T] {
+        match self {
+            Store::Mmap((_, mmap)) => unsafe {
+                std::slice::from_raw_parts(
+                    mmap.as_ptr() as *const T,
+                    mmap.len() / std::mem::size_of::<T>(),
+                )
+            },
+            Store::Vec(vec) => vec.as_slice(),
+        }
+    }
+    fn resize(&mut self, n: isize) {
+        let new_len = (self.slice().len() as isize + n) as usize;
+        match self {
+            Store::Mmap((ref file, ref mut mmap)) => {
+                mmap.flush().unwrap();
+                let bytes = new_len * std::mem::size_of::<T>();
+                file.set_len(bytes as u64).unwrap();
+                *mmap = unsafe { MmapMut::map_mut(file).unwrap() };
+            }
+            Store::Vec(ref mut vec) => {
+                vec.resize(new_len, T::default());
+            }
+        };
+    }
+}
 #[derive(Debug)]
-pub struct VPTree<'a, F: Float + Debug + Default> {
+pub struct VPTree<F: Float + Debug + Default> {
     pub nodes: Vec<Node>,
     pub dimensions: usize,
-    pub vector_layer: &'a mut [F],
-    pub swid_layer: &'a mut [Swid],
     pub vector_store: Store<F>,
     pub swid_store: Store<Swid>,
     space: Distance,
@@ -138,33 +174,11 @@ pub enum Node {
     },
 }
 
-macro_rules! resize_store {
-    ($self:ident, $n:expr, $store:ident, $layer:ident, $type:ident) => {
-        let new_len = ($self.$layer.len() as isize + $n) as usize;
-        let ptr = match $self.$store {
-            Store::Mmap((ref file, ref mut mmap)) => {
-                mmap.flush().unwrap();
-                let bytes = new_len * std::mem::size_of::<$type>();
-                file.set_len(bytes as u64).unwrap();
-                *mmap = unsafe { MmapMut::map_mut(file).unwrap() };
-                mmap.as_mut_ptr() as *mut $type
-            }
-            Store::Vec(ref mut vec) => {
-                vec.resize(new_len, $type::default());
-                vec.as_mut_ptr()
-            }
-        };
-        $self.$layer = unsafe { std::slice::from_raw_parts_mut(ptr, new_len) };
-    };
-}
-
-impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
-    pub fn new(space: Distance, dimensions: usize) -> VPTree<'a, F> {
+impl<'a, F: Float + Debug + Default> VPTree<F> {
+    pub fn new(space: Distance, dimensions: usize) -> VPTree<F> {
         VPTree {
             nodes: Vec::new(),
             dimensions,
-            vector_layer: &mut [],
-            swid_layer: &mut [],
             vector_store: Store::Vec(Vec::new()),
             swid_store: Store::Vec(Vec::new()),
             space,
@@ -176,7 +190,7 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
         dimensions: usize,
         vector_store: &Path,
         swid_store: &Path,
-    ) -> VPTree<'a, F> {
+    ) -> VPTree<F> {
         let vector_file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -203,11 +217,9 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                 swid_mmap.len() / std::mem::size_of::<Swid>(),
             )
         };
-        let mut tree: VPTree<'_, F> = VPTree {
+        let mut tree: VPTree<F> = VPTree {
             nodes: Vec::new(),
             dimensions,
-            vector_layer: &mut [],
-            swid_layer: &mut [],
             vector_store: Store::Vec(Vec::new()),
             swid_store: Store::Vec(Vec::new()),
             space,
@@ -221,12 +233,11 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
             });
         tree.vector_store = Store::Mmap((vector_file, vector_mmap));
         tree.swid_store = Store::Mmap((swid_file, swid_mmap));
-        tree.vector_layer = vector_layer;
-        tree.swid_layer = swid_layer;
         tree
     }
     fn get_vector(&self, vector_id: NodeID) -> &[F] {
-        self.vector_layer
+        self.vector_store
+            .slice()
             .chunks(self.dimensions)
             .nth(vector_id)
             .unwrap()
@@ -266,21 +277,16 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
         }
     }
     fn resize(&mut self, n: isize) {
-        resize_store!(
-            self,
-            n * self.dimensions as isize,
-            vector_store,
-            vector_layer,
-            F
-        );
-        resize_store!(self, n, swid_store, swid_layer, Swid);
+        self.vector_store.resize(n * self.dimensions as isize);
+        self.swid_store.resize(n);
     }
     pub fn insert(&mut self, q: &[F], swid: Swid) {
-        let swid_id = self.swid_layer.len();
+        let swid_id = self.swid_store.slice().len();
         let vector_id = swid_id;
         self.resize(1);
-        self.swid_layer[swid_id] = swid;
-        self.vector_layer[(vector_id * self.dimensions)..((vector_id + 1) * self.dimensions)]
+        self.swid_store.slice_mut()[swid_id] = swid;
+        self.vector_store.slice_mut()
+            [(vector_id * self.dimensions)..((vector_id + 1) * self.dimensions)]
             .copy_from_slice(q);
         let closest_leaf = self.get_closest_leaf(q);
         match closest_leaf {
@@ -401,7 +407,7 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
         while result.len() < k {
             match self.nodes[current_id] {
                 Node::Leaf1 {} => {
-                    let tuple = (self.swid_layer[current_vector], current_distance);
+                    let tuple = (self.swid_store.slice()[current_vector], current_distance);
                     if filter(tuple) {
                         result.push(tuple);
                     }
@@ -410,12 +416,12 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
                     stack.push((left_next, current_vector, current_distance));
                 }
                 Node::Leaf2 { right_vector } => {
-                    let tuple = (self.swid_layer[current_vector], current_distance);
+                    let tuple = (self.swid_store.slice()[current_vector], current_distance);
                     if filter(tuple) {
                         result.push(tuple);
                     }
                     let distance = get_distance(q, self.get_vector(right_vector), self.space);
-                    let tuple = (self.swid_layer[right_vector], distance);
+                    let tuple = (self.swid_store.slice()[right_vector], distance);
                     if filter(tuple) {
                         result.push(tuple);
                     }
@@ -443,24 +449,28 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
     }
     pub fn remove(&mut self, swid_to_remove: Swid) -> Result<(), ()> {
         match self
-            .swid_layer
+            .swid_store
+            .slice()
             .iter()
             .position(|&swid| swid == swid_to_remove)
         {
             Some(swid_id) => {
-                let last = self.swid_layer.len() - 1;
-                let mut last_vector = self.vector_layer[last * self.dimensions..].to_owned();
-                self.swid_layer.swap(swid_id, last);
-                self.vector_layer[swid_id * self.dimensions..(swid_id + 1) * self.dimensions]
+                let last = self.swid_store.slice().len() - 1;
+                let mut last_vector =
+                    self.vector_store.slice()[last * self.dimensions..].to_owned();
+                self.swid_store.slice_mut().swap(swid_id, last);
+                self.vector_store.slice_mut()
+                    [swid_id * self.dimensions..(swid_id + 1) * self.dimensions]
                     .swap_with_slice(last_vector.as_mut_slice());
                 self.resize(-1);
             }
             None => return Err(()),
         }
         let mut new_tree = VPTree::new(self.space, self.dimensions);
-        self.swid_layer
+        self.swid_store
+            .slice()
             .iter()
-            .zip(self.vector_layer.chunks(self.dimensions))
+            .zip(self.vector_store.slice().chunks(self.dimensions))
             .for_each(|(swid, vector)| {
                 new_tree.insert(vector, *swid);
             });
