@@ -138,6 +138,26 @@ pub enum Node {
     },
 }
 
+macro_rules! resize_store {
+    ($self:ident, $n:expr, $store:ident, $layer:ident, $type:ident) => {
+        let new_len = ($self.$layer.len() as isize + $n) as usize;
+        let ptr = match $self.$store {
+            Store::Mmap((ref file, ref mut mmap)) => {
+                mmap.flush().unwrap();
+                let bytes = new_len * std::mem::size_of::<$type>();
+                file.set_len(bytes as u64).unwrap();
+                *mmap = unsafe { MmapMut::map_mut(file).unwrap() };
+                mmap.as_mut_ptr() as *mut $type
+            }
+            Store::Vec(ref mut vec) => {
+                vec.resize(new_len, $type::default());
+                vec.as_mut_ptr()
+            }
+        };
+        $self.$layer = unsafe { std::slice::from_raw_parts_mut(ptr, new_len) };
+    };
+}
+
 impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
     pub fn new(space: Distance, dimensions: usize) -> VPTree<'a, F> {
         VPTree {
@@ -246,49 +266,14 @@ impl<'a, F: Float + Debug + Default> VPTree<'a, F> {
         }
     }
     fn resize(&mut self, n: isize) {
-        let new_len = if n > 0 {
-            self.vector_layer.len() + n.unsigned_abs() * self.dimensions
-        } else {
-            self.vector_layer.len() - n.unsigned_abs() * self.dimensions
-        };
-        match self.vector_store {
-            Store::Mmap((ref file, ref mut mmap)) => {
-                mmap.flush().unwrap();
-                let bytes = new_len * std::mem::size_of::<F>();
-                file.set_len(bytes as u64).unwrap();
-
-                *mmap = unsafe { MmapMut::map_mut(file).unwrap() };
-
-                self.vector_layer =
-                    unsafe { std::slice::from_raw_parts_mut(mmap.as_mut_ptr() as *mut F, new_len) };
-            }
-            Store::Vec(ref mut vec) => {
-                vec.resize(new_len, F::zero());
-                self.vector_layer =
-                    unsafe { std::slice::from_raw_parts_mut(vec.as_mut_ptr(), new_len) };
-            }
-        }
-        let new_len = if n > 0 {
-            self.swid_layer.len() + n.unsigned_abs()
-        } else {
-            self.swid_layer.len() - n.unsigned_abs()
-        };
-        match self.swid_store {
-            Store::Mmap((ref file, ref mut mmap)) => {
-                mmap.flush().unwrap();
-                let bytes = new_len * std::mem::size_of::<Swid>();
-                file.set_len(bytes as u64).unwrap();
-                *mmap = unsafe { MmapMut::map_mut(file).unwrap() };
-                self.swid_layer = unsafe {
-                    std::slice::from_raw_parts_mut(mmap.as_mut_ptr() as *mut Swid, new_len)
-                };
-            }
-            Store::Vec(ref mut vec) => {
-                vec.resize(new_len, Swid::default());
-                self.swid_layer =
-                    unsafe { std::slice::from_raw_parts_mut(vec.as_mut_ptr(), new_len) };
-            }
-        }
+        resize_store!(
+            self,
+            n * self.dimensions as isize,
+            vector_store,
+            vector_layer,
+            F
+        );
+        resize_store!(self, n, swid_store, swid_layer, Swid);
     }
     pub fn insert(&mut self, q: &[F], swid: Swid) {
         let swid_id = self.swid_layer.len();
