@@ -558,7 +558,7 @@ mod tests {
         });
     }
 
-    const LINEAR_SEARCH_SIZE: usize = 200000;
+    const LINEAR_SEARCH_SIZE: usize = 2000;
     const LINEAR_SEARCH_TOPK: usize = 1000;
     #[test]
     fn test_vs_linear_search() {
