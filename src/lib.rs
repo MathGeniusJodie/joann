@@ -478,20 +478,22 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use num_traits::abs;
+    use rand::Rng;
 
     #[test]
     fn test_vp_tree() {
         let mut vptree = VPTree::<f64>::new(Distance::Euclidean, 2);
-        vptree.insert(&[3.0, 3.0], 4);
-        vptree.insert(&[4.0, 4.0], 352);
-        vptree.insert(&[5.0, 5.0], 43);
-        vptree.insert(&[6.0, 6.0], 41);
-        vptree.insert(&[7.0, 7.0], 35);
-        vptree.insert(&[8.0, 8.0], 52);
-        vptree.insert(&[9.0, 9.0], 42);
-        vptree.insert(&[0.0, 0.0], 32);
-        vptree.insert(&[1.0, 1.0], 222);
-        vptree.insert(&[2.0, 2.0], 567);
+        vptree.insert(&[3.0, 3.0], 4).unwrap();
+        vptree.insert(&[4.0, 4.0], 352).unwrap();
+        vptree.insert(&[5.0, 5.0], 43).unwrap();
+        vptree.insert(&[6.0, 6.0], 41).unwrap();
+        vptree.insert(&[7.0, 7.0], 35).unwrap();
+        vptree.insert(&[8.0, 8.0], 52).unwrap();
+        vptree.insert(&[9.0, 9.0], 42).unwrap();
+        vptree.insert(&[0.0, 0.0], 32).unwrap();
+        vptree.insert(&[1.0, 1.0], 222).unwrap();
+        vptree.insert(&[2.0, 2.0], 567).unwrap();
         //dbg!(&vptree);
         assert_eq!(
             vptree.knn(&[0.0, 0.0], 3),
@@ -501,8 +503,8 @@ mod tests {
                 (567, 2.0 * std::f64::consts::SQRT_2)
             ]
         );
-        vptree.remove(32);
-        vptree.remove(4);
+        vptree.remove(32).unwrap();
+        vptree.remove(4).unwrap();
         //dbg!(&vptree);
         assert_eq!(
             vptree.knn(&[0.0, 0.0], 3),
@@ -522,13 +524,13 @@ mod tests {
         microbench::bench(&bench_options, "insert", || {
             for i in 0..10000 {
                 let vector = vec![i as f32; BENCH_DIMENSIONS];
-                vptree.insert(&vector, i);
+                vptree.insert(&vector, i).unwrap();
             }
             vptree = VPTree::<f32>::new(Distance::Euclidean, BENCH_DIMENSIONS);
         });
         for i in 0..10000 {
             let vector = vec![i as f32; BENCH_DIMENSIONS];
-            vptree.insert(&vector, i);
+            vptree.insert(&vector, i).unwrap();
         }
         microbench::bench(&bench_options, "knn_topk1", || {
             for i in 0..10000 {
@@ -554,5 +556,58 @@ mod tests {
                 vptree.knn(&vector, 1000);
             }
         });
+    }
+
+    const LINEAR_SEARCH_SIZE: usize = 200000;
+    const LINEAR_SEARCH_TOPK: usize = 1000;
+    #[test]
+    fn test_vs_linear_search() {
+        //make LINEAR_SEARCH_SIZE random 300 dimensional vectors
+        let mut rng = rand::thread_rng();
+        let mut vectors = Vec::new();
+        for _ in 0..LINEAR_SEARCH_SIZE {
+            let vector: Vec<f32> = (0..300).map(|_| rng.gen_range(-100.0..100.0)).collect();
+            //divide each vector by 100
+            let vector: Vec<f32> = vector.iter().map(|x| x / 100.0).collect();
+            vectors.push(vector);
+        }
+
+        //build a vptree
+        println!("building vptree");
+        let mut vptree = VPTree::<f32>::new(Distance::Euclidean, BENCH_DIMENSIONS);
+        for (i, vector) in vectors.iter().enumerate() {
+            vptree.insert(vector, i as u128).unwrap();
+        }
+
+        //get random vector for sampling
+        let random_vector = &vectors[0];
+
+        //topk LINEAR_SEARCH_TOPK
+        println!("getting topk LINEAR_SEARCH_TOPK");
+        let topk = vptree.knn(random_vector, LINEAR_SEARCH_TOPK);
+
+        //linear search topk LINEAR_SEARCH_TOPK
+        println!("getting linear search topk LINEAR_SEARCH_TOPK");
+        let mut linear_search_topk = Vec::new();
+        for (i, vector) in vectors.iter().enumerate() {
+            let distance = get_distance(random_vector, vector, Distance::Euclidean);
+            linear_search_topk.push((i as u128, distance));
+        }
+        linear_search_topk.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+        let mut differences = Vec::new();
+
+        //compare and see if the topk is the same, if they aren't, print the index they differ
+        println!("comparing topk and linear search topk");
+        for (a, b) in topk.iter().zip(linear_search_topk.iter()) {
+            if a.0 != b.0 {
+                differences.push(abs(a.1 - b.1));
+            }
+        }
+
+        //average distance of topk
+        let average_distance_topk: f32 = differences.iter().sum::<f32>() / differences.len() as f32;
+        println!("average deviation of topk: {}", average_distance_topk);
+        assert!(average_distance_topk < 1.0);
     }
 }
