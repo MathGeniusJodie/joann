@@ -243,7 +243,6 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
     fn get_closest_leaf(&self, q: &[F]) -> Option<Vec<NodeID>> {
         self.top_node?;
         let mut current_node = self.top_node.unwrap();
-        //let mut current_distance = get_distance(q, self.nodes[current_node].middle(), self.space);
         let mut parent_chain = vec![current_node];
         loop {
             (_, current_node) = match self.nodes[current_node] {
@@ -263,10 +262,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                     ),
                     |a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal),
                 ),
-                Node::Branch1 { left_next, .. } => (
-                    get_distance(q, self.nodes[left_next].middle(), self.space),
-                    left_next,
-                ),
+                Node::Branch1 { left_next, .. } => (F::zero(), left_next),
             };
             parent_chain.push(current_node);
         }
@@ -328,6 +324,9 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                         .map(|(&a, &b)| (a + b) * F::from(0.5).unwrap())
                         .collect(),
                 };
+                if !chain.is_empty() {
+                    self.recalculate_middle(chain);
+                }
                 return;
             }
             Node::Branch1 { left_next, .. } => {
@@ -341,6 +340,9 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                         .map(|(&a, &b)| (a + b) * F::from(0.5).unwrap())
                         .collect(),
                 };
+                if !chain.is_empty() {
+                    self.recalculate_middle(chain);
+                }
                 return;
             }
             Node::Leaf2 {
@@ -424,6 +426,35 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
             self.top_node = Some(new_parent_id);
         } else {
             self.push_child(None, Some(new_center_id), chain);
+        }
+    }
+    fn recalculate_middle(&mut self, mut chain: Vec<NodeID>) {
+        let parent = chain.pop().unwrap();
+        let new_middle = match self.nodes[parent] {
+            Node::Branch1 { left_next, .. } => self.nodes[left_next].middle().to_vec(),
+            Node::Branch2 {
+                left_next,
+                right_next,
+                ..
+            } => self.nodes[left_next]
+                .middle()
+                .iter()
+                .zip(self.nodes[right_next].middle())
+                .map(|(&a, &b)| (a + b) * F::from(0.5).unwrap())
+                .collect(),
+            _ => unreachable!(),
+        };
+        match self.nodes[parent] {
+            Node::Branch1 { ref mut middle, .. } => {
+                *middle = new_middle;
+            }
+            Node::Branch2 { ref mut middle, .. } => {
+                *middle = new_middle;
+            }
+            _ => {}
+        }
+        if !chain.is_empty() {
+            self.recalculate_middle(chain);
         }
     }
     pub fn knn(&self, q: &[F], k: usize) -> Vec<(Swid, F)> {
