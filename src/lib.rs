@@ -1,6 +1,7 @@
 use memmap2::MmapMut;
 use num_traits::Float;
 use std::{
+    collections::HashMap,
     fmt::Debug,
     fs::{File, OpenOptions},
     path::Path,
@@ -148,6 +149,7 @@ pub struct VPTree<F: Float + Debug + Default> {
     pub dimensions: usize,
     pub vector_store: Store<F>,
     pub swid_store: Store<Swid>,
+    pub id_from_swid: HashMap<Swid, NodeID>,
     space: Distance,
     top_node: Option<TopNode>,
 }
@@ -181,6 +183,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
             dimensions,
             vector_store: Store::Vec(Vec::new()),
             swid_store: Store::Vec(Vec::new()),
+            id_from_swid: HashMap::new(),
             space,
             top_node: None,
         }
@@ -210,6 +213,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
             dimensions,
             vector_store: Store::Mmap((vector_file, vector_mmap)),
             swid_store: Store::Mmap((swid_file, swid_mmap)),
+            id_from_swid: HashMap::new(),
             space,
             top_node: None,
         };
@@ -275,7 +279,9 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
     }
     pub fn index(&mut self, vector_id: NodeID) {
         let q = self.get_vector(vector_id);
+        let swid = self.swid_store.slice()[vector_id];
         let closest_leaf = self.get_closest_leaf(q);
+        self.id_from_swid.insert(swid, vector_id);
         match closest_leaf {
             Some(leaf_chain) => {
                 self.push_child(vector_id, None, leaf_chain);
@@ -434,14 +440,15 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
         result.truncate(k);
         result
     }
+    pub fn get_vector_by_swid(&self, swid: Swid) -> Option<&[F]> {
+        match self.id_from_swid.get(&swid) {
+            Some(&id) => Some(self.get_vector(id)),
+            None => None,
+        }
+    }
     pub fn remove(&mut self, swid_to_remove: Swid) -> Result<(), ()> {
-        match self
-            .swid_store
-            .slice()
-            .iter()
-            .position(|&swid| swid == swid_to_remove)
-        {
-            Some(swid_id) => {
+        match self.id_from_swid.get(&swid_to_remove) {
+            Some(&swid_id) => {
                 let last = self.swid_store.slice().len() - 1;
                 let mut last_vector =
                     self.vector_store.slice()[last * self.dimensions..].to_owned();
@@ -454,6 +461,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
             None => return Err(()),
         }
         self.nodes.clear();
+        self.id_from_swid.clear();
         self.top_node = None;
         for i in 0..self.swid_store.slice().len() {
             self.index(i);
