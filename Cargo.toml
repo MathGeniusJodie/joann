@@ -11,3 +11,4 @@ memmap2 = "0.9.4"
 
 [dev-dependencies]
 microbench = "0.5.0"
+rand = "0.8.4"
