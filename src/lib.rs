@@ -213,6 +213,15 @@ impl<F: Float + Debug + Default> Node<F> {
             } => *p = parent,
         }
     }
+    fn parent(&self) -> Option<NodeID> {
+        match self {
+            Node::Branch2 { parent, .. } => *parent,
+            Node::Leaf2 { parent, .. } => *parent,
+            Node::Branch1 { parent, .. } => *parent,
+            Node::Leaf1 { parent, .. } => *parent,
+            Node::Leaf0 { parent, .. } => *parent,
+        }
+    }
 }
 
 impl<'a, F: Float + Debug + Default> VPTree<F> {
@@ -367,7 +376,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                         .collect(),
                 };
                 if !chain.is_empty() {
-                    self.recalculate_middle(chain);
+                    self.recalculate_middle(*chain.last().unwrap());
                 }
                 let swid = self.swid_store.slice()[new_vector_id.unwrap()];
                 self.nodeid_from_swid.insert(swid, id);
@@ -388,7 +397,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                         .collect(),
                 };
                 if !chain.is_empty() {
-                    self.recalculate_middle(chain);
+                    self.recalculate_middle(*chain.last().unwrap());
                 }
                 return;
             }
@@ -493,8 +502,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
             self.push_child(None, Some(new_center_id), chain);
         }
     }
-    fn recalculate_middle(&mut self, mut chain: Vec<NodeID>) {
-        let parent = chain.pop().unwrap();
+    fn recalculate_middle(&mut self, parent: NodeID) {
         let new_middle = match self.nodes[parent] {
             Node::Branch1 { left_next, .. } => self.nodes[left_next].middle().to_vec(),
             Node::Branch2 {
@@ -518,8 +526,8 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
             }
             _ => {}
         }
-        if !chain.is_empty() {
-            self.recalculate_middle(chain);
+        if self.nodes[parent].parent().is_some() {
+            self.recalculate_middle(self.nodes[parent].parent().unwrap());
         }
     }
     pub fn knn(&self, q: &[F], k: usize) -> Vec<(Swid, F)> {
@@ -654,7 +662,9 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                         middle: self.get_vector(left_vector).to_vec(),
                     };
                 }
-                // todo: recalculate middle
+                if parent.is_some() {
+                    self.recalculate_middle(parent.unwrap());
+                }
             }
             Node::Leaf1 {
                 parent, ref middle, ..
@@ -663,6 +673,9 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                     parent,
                     middle: middle.to_vec(),
                 };
+                if parent.is_some() {
+                    self.recalculate_middle(parent.unwrap());
+                }
             }
             _ => {}
         }
