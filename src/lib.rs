@@ -203,36 +203,19 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
             .create(true)
             .open(swid_store)
             .unwrap();
-        let mut vector_mmap = unsafe { MmapMut::map_mut(&vector_file).unwrap() };
-        let mut swid_mmap = unsafe { MmapMut::map_mut(&swid_file).unwrap() };
-        let vector_layer = unsafe {
-            std::slice::from_raw_parts_mut(
-                vector_mmap.as_mut_ptr() as *mut F,
-                vector_mmap.len() / std::mem::size_of::<F>(),
-            )
-        };
-        let swid_layer = unsafe {
-            std::slice::from_raw_parts_mut(
-                swid_mmap.as_mut_ptr() as *mut Swid,
-                swid_mmap.len() / std::mem::size_of::<Swid>(),
-            )
-        };
+        let vector_mmap = unsafe { MmapMut::map_mut(&vector_file).unwrap() };
+        let swid_mmap = unsafe { MmapMut::map_mut(&swid_file).unwrap() };
         let mut tree: VPTree<F> = VPTree {
             nodes: Vec::new(),
             dimensions,
-            vector_store: Store::Vec(Vec::new()),
-            swid_store: Store::Vec(Vec::new()),
+            vector_store: Store::Mmap((vector_file, vector_mmap)),
+            swid_store: Store::Mmap((swid_file, swid_mmap)),
             space,
             top_node: None,
         };
-        swid_layer
-            .iter()
-            .zip(vector_layer.chunks(dimensions))
-            .for_each(|(swid, vector)| {
-                tree.insert(vector, *swid);
-            });
-        tree.vector_store = Store::Mmap((vector_file, vector_mmap));
-        tree.swid_store = Store::Mmap((swid_file, swid_mmap));
+        for i in 0..tree.swid_store.slice().len() {
+            tree.index(i);
+        }
         tree
     }
     fn get_vector(&self, vector_id: NodeID) -> &[F] {
@@ -288,6 +271,10 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
         self.vector_store.slice_mut()
             [(vector_id * self.dimensions)..((vector_id + 1) * self.dimensions)]
             .copy_from_slice(q);
+        self.index(vector_id);
+    }
+    pub fn index(&mut self, vector_id: NodeID) {
+        let q = self.get_vector(vector_id);
         let closest_leaf = self.get_closest_leaf(q);
         match closest_leaf {
             Some(leaf_chain) => {
@@ -466,16 +453,11 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
             }
             None => return Err(()),
         }
-        let mut new_tree = VPTree::new(self.space, self.dimensions);
-        self.swid_store
-            .slice()
-            .iter()
-            .zip(self.vector_store.slice().chunks(self.dimensions))
-            .for_each(|(swid, vector)| {
-                new_tree.insert(vector, *swid);
-            });
-        self.nodes = new_tree.nodes;
-        self.top_node = new_tree.top_node;
+        self.nodes.clear();
+        self.top_node = None;
+        for i in 0..self.swid_store.slice().len() {
+            self.index(i);
+        }
         Ok(())
     }
 }
