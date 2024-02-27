@@ -218,7 +218,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
             top_node: None,
         };
         for i in 0..tree.swid_store.slice().len() {
-            tree.index(i);
+            tree.index(i).unwrap()
         }
         tree
     }
@@ -267,7 +267,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
         self.vector_store.resize(n * self.dimensions as isize);
         self.swid_store.resize(n);
     }
-    pub fn insert(&mut self, q: &[F], swid: Swid) {
+    pub fn insert(&mut self, q: &[F], swid: Swid) -> Result<(), ()> {
         let swid_id = self.swid_store.slice().len();
         let vector_id = swid_id;
         self.resize(1);
@@ -275,13 +275,17 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
         self.vector_store.slice_mut()
             [(vector_id * self.dimensions)..((vector_id + 1) * self.dimensions)]
             .copy_from_slice(q);
-        self.index(vector_id);
+        self.index(vector_id)
     }
-    pub fn index(&mut self, vector_id: NodeID) {
+    pub fn index(&mut self, vector_id: NodeID) -> Result<(), ()> {
         let q = self.get_vector(vector_id);
         let swid = self.swid_store.slice()[vector_id];
         let closest_leaf = self.get_closest_leaf(q);
-        self.id_from_swid.insert(swid, vector_id);
+        if !self.id_from_swid.contains_key(&swid) {
+            self.id_from_swid.insert(swid, vector_id);
+        } else {
+            return Err(());
+        }
         match closest_leaf {
             Some(leaf_chain) => {
                 self.push_child(vector_id, None, leaf_chain);
@@ -294,6 +298,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                 self.nodes.push(Node::Leaf1 {})
             }
         }
+        Ok(())
     }
     fn push_child(
         &mut self,
@@ -464,7 +469,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
         self.id_from_swid.clear();
         self.top_node = None;
         for i in 0..self.swid_store.slice().len() {
-            self.index(i);
+            self.index(i).unwrap();
         }
         Ok(())
     }
