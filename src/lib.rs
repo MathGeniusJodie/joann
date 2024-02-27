@@ -149,7 +149,7 @@ pub struct VPTree<F: Float + Debug + Default> {
     pub dimensions: usize,
     pub vector_store: Store<F>,
     pub swid_store: Store<Swid>,
-    pub id_from_swid: HashMap<Swid, NodeID>,
+    pub nodeid_from_swid: HashMap<Swid, NodeID>,
     space: Distance,
     top_node: Option<NodeID>,
 }
@@ -158,20 +158,28 @@ pub struct VPTree<F: Float + Debug + Default> {
 pub enum Node<F> {
     Branch1 {
         left_next: NodeID,
+        parent: Option<NodeID>,
         middle: Vec<F>,
     },
     Branch2 {
         left_next: NodeID,
         right_next: NodeID,
+        parent: Option<NodeID>,
         middle: Vec<F>,
     },
     Leaf1 {
         left_vector: NodeID,
+        parent: Option<NodeID>,
         middle: Vec<F>,
     },
     Leaf2 {
         left_vector: NodeID,
         right_vector: NodeID,
+        parent: Option<NodeID>,
+        middle: Vec<F>,
+    },
+    Leaf0 {
+        parent: Option<NodeID>,
         middle: Vec<F>,
     },
 }
@@ -183,6 +191,26 @@ impl<F: Float + Debug + Default> Node<F> {
             Node::Leaf2 { middle, .. } => middle,
             Node::Branch1 { middle, .. } => middle,
             Node::Leaf1 { middle, .. } => middle,
+            Node::Leaf0 { middle, .. } => middle,
+        }
+    }
+    fn set_parent(&mut self, parent: Option<NodeID>) {
+        match self {
+            Node::Branch2 {
+                parent: ref mut p, ..
+            } => *p = parent,
+            Node::Leaf2 {
+                parent: ref mut p, ..
+            } => *p = parent,
+            Node::Branch1 {
+                parent: ref mut p, ..
+            } => *p = parent,
+            Node::Leaf1 {
+                parent: ref mut p, ..
+            } => *p = parent,
+            Node::Leaf0 {
+                parent: ref mut p, ..
+            } => *p = parent,
         }
     }
 }
@@ -194,7 +222,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
             dimensions,
             vector_store: Store::Vec(Vec::new()),
             swid_store: Store::Vec(Vec::new()),
-            id_from_swid: HashMap::new(),
+            nodeid_from_swid: HashMap::new(),
             space,
             top_node: None,
         }
@@ -224,7 +252,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
             dimensions,
             vector_store: Store::Mmap((vector_file, vector_mmap)),
             swid_store: Store::Mmap((swid_file, swid_mmap)),
-            id_from_swid: HashMap::new(),
+            nodeid_from_swid: HashMap::new(),
             space,
             top_node: None,
         };
@@ -246,7 +274,9 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
         let mut parent_chain = vec![current_node];
         loop {
             (_, current_node) = match self.nodes[current_node] {
-                Node::Leaf1 { .. } | Node::Leaf2 { .. } => return Some(parent_chain),
+                Node::Leaf1 { .. } | Node::Leaf2 { .. } | Node::Leaf0 { .. } => {
+                    return Some(parent_chain)
+                }
                 Node::Branch2 {
                     left_next,
                     right_next,
@@ -285,11 +315,6 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
         let q = self.get_vector(vector_id).to_vec();
         let swid = self.swid_store.slice()[vector_id];
         let closest_leaf = self.get_closest_leaf(&q);
-        if !self.id_from_swid.contains_key(&swid) {
-            self.id_from_swid.insert(swid, vector_id);
-        } else {
-            return Err(());
-        }
         match closest_leaf {
             Some(leaf_chain) => {
                 self.push_child(Some(vector_id), None, leaf_chain);
@@ -298,8 +323,10 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                 self.top_node = Some(0);
                 self.nodes.push(Node::Leaf1 {
                     left_vector: vector_id,
+                    parent: None,
                     middle: q,
-                })
+                });
+                self.nodeid_from_swid.insert(swid, 0);
             }
         }
         Ok(())
@@ -313,10 +340,25 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
         let tip = chain.pop().unwrap();
         let id = tip;
         let new_center_id = match self.nodes[id] {
-            Node::Leaf1 { left_vector, .. } => {
+            Node::Leaf0 { parent, .. } => {
+                self.nodes[id] = Node::Leaf1 {
+                    left_vector: new_vector_id.unwrap(),
+                    parent,
+                    middle: self.get_vector(new_vector_id.unwrap()).to_vec(),
+                };
+                let swid = self.swid_store.slice()[new_vector_id.unwrap()];
+                self.nodeid_from_swid.insert(swid, id);
+                return;
+            }
+            Node::Leaf1 {
+                left_vector,
+                parent,
+                ..
+            } => {
                 self.nodes[id] = Node::Leaf2 {
                     left_vector: left_vector,
                     right_vector: new_vector_id.unwrap(),
+                    parent,
                     middle: self
                         .get_vector(new_vector_id.unwrap())
                         .iter()
@@ -327,12 +369,17 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                 if !chain.is_empty() {
                     self.recalculate_middle(chain);
                 }
+                let swid = self.swid_store.slice()[new_vector_id.unwrap()];
+                self.nodeid_from_swid.insert(swid, id);
                 return;
             }
-            Node::Branch1 { left_next, .. } => {
+            Node::Branch1 {
+                left_next, parent, ..
+            } => {
                 self.nodes[id] = Node::Branch2 {
                     left_next: left_next,
                     right_next: new_id.unwrap(),
+                    parent,
                     middle: self.nodes[left_next]
                         .middle()
                         .iter()
@@ -348,7 +395,9 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
             Node::Leaf2 {
                 left_vector,
                 right_vector,
+                parent,
                 ref middle,
+                ..
             } => {
                 let new_distance =
                     get_distance(self.get_vector(new_vector_id.unwrap()), middle, self.space);
@@ -358,6 +407,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                     self.nodes[id] = Node::Leaf2 {
                         left_vector: left_vector,
                         right_vector: new_vector_id.unwrap(),
+                        parent,
                         middle: self
                             .get_vector(new_vector_id.unwrap())
                             .iter()
@@ -367,19 +417,28 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                     };
                     self.nodes.push(Node::Leaf1 {
                         left_vector: right_vector,
+                        parent,
                         middle: self.get_vector(right_vector).to_vec(),
                     });
+                    let swid = self.swid_store.slice()[new_vector_id.unwrap()];
+                    self.nodeid_from_swid.insert(swid, id);
+                    let swid = self.swid_store.slice()[right_vector];
+                    self.nodeid_from_swid.insert(swid, new_center_id);
                 } else {
                     self.nodes.push(Node::Leaf1 {
                         left_vector: new_vector_id.unwrap(),
+                        parent,
                         middle: self.get_vector(new_vector_id.unwrap()).to_vec(),
                     });
+                    let swid = self.swid_store.slice()[new_vector_id.unwrap()];
+                    self.nodeid_from_swid.insert(swid, new_center_id);
                 }
                 new_center_id
             }
             Node::Branch2 {
                 left_next,
                 right_next,
+                parent,
                 ref middle,
             } => {
                 let new_distance =
@@ -391,6 +450,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                     self.nodes[id] = Node::Branch2 {
                         left_next: left_next,
                         right_next: new_id.unwrap(),
+                        parent,
                         middle: self.nodes[left_next]
                             .middle()
                             .iter()
@@ -400,13 +460,17 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                     };
                     self.nodes.push(Node::Branch1 {
                         left_next: right_next,
+                        parent,
                         middle: self.nodes[right_next].middle().to_vec(),
                     });
+                    self.nodes[right_next].set_parent(Some(new_center_id));
                 } else {
                     self.nodes.push(Node::Branch1 {
                         left_next: new_id.unwrap(),
+                        parent,
                         middle: self.nodes[new_id.unwrap()].middle().to_vec(),
                     });
+                    self.nodes[new_id.unwrap()].set_parent(Some(new_center_id));
                 }
                 new_center_id
             }
@@ -416,6 +480,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
             self.nodes.push(Node::Branch2 {
                 left_next: id,
                 right_next: new_center_id,
+                parent: None,
                 middle: self.nodes[id]
                     .middle()
                     .iter()
@@ -458,23 +523,34 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
         }
     }
     pub fn knn(&self, q: &[F], k: usize) -> Vec<(Swid, F)> {
-        self.knn_with_filter(q, k, |_| true)
+        let mut count = 0;
+        let mut result = self.search(q, |_| {
+            count += 1;
+            (false, count > k + 1)
+        });
+        result.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        result.truncate(k);
+        result
     }
-    pub fn knn_with_filter(
+    pub fn search(
         &self,
         q: &[F],
-        k: usize,
-        filter: fn((Swid, F)) -> bool,
+        mut filter: impl FnMut((Swid, F)) -> (bool, bool),
     ) -> Vec<(Swid, F)> {
-        let mut result: Vec<(u128, F)> = Vec::with_capacity(k);
+        let mut result: Vec<(u128, F)> = Vec::new();
         let mut current_id = self.top_node.unwrap();
-        let mut stack: Vec<(usize, F)> = Vec::with_capacity(k);
-        while result.len() < k {
+        let mut stack: Vec<(usize, F)> = Vec::new();
+        loop {
             match self.nodes[current_id] {
+                Node::Leaf0 { .. } => {}
                 Node::Leaf1 { left_vector, .. } => {
                     let distance = get_distance(q, self.get_vector(left_vector), self.space);
                     let tuple = (self.swid_store.slice()[left_vector], distance);
-                    if filter(tuple) {
+                    let (continue_flag, break_flag) = filter(tuple);
+                    if break_flag {
+                        break;
+                    }
+                    if !continue_flag {
                         result.push(tuple);
                     }
                 }
@@ -489,12 +565,20 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                 } => {
                     let distance = get_distance(q, self.get_vector(left_vector), self.space);
                     let tuple = (self.swid_store.slice()[left_vector], distance);
-                    if filter(tuple) {
+                    let (continue_flag, break_flag) = filter(tuple);
+                    if break_flag {
+                        break;
+                    }
+                    if !continue_flag {
                         result.push(tuple);
                     }
                     let distance = get_distance(q, self.get_vector(right_vector), self.space);
                     let tuple = (self.swid_store.slice()[right_vector], distance);
-                    if filter(tuple) {
+                    let (continue_flag, break_flag) = filter(tuple);
+                    if break_flag {
+                        break;
+                    }
+                    if !continue_flag {
                         result.push(tuple);
                     }
                 }
@@ -515,35 +599,109 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                 None => break,
             };
         }
-        result.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        result.truncate(k);
         result
     }
-    pub fn get_vector_by_swid(&self, swid: Swid) -> Option<&[F]> {
-        match self.id_from_swid.get(&swid) {
-            Some(&id) => Some(self.get_vector(id)),
+    fn get_vector_id_by_swid(&self, swid: Swid) -> Option<NodeID> {
+        match self.nodeid_from_swid.get(&swid) {
+            Some(&id) => match self.nodes[id] {
+                Node::Leaf1 { left_vector, .. } => Some(left_vector),
+                Node::Leaf2 {
+                    left_vector,
+                    right_vector,
+                    ..
+                } => {
+                    let left_swid = self.swid_store.slice()[left_vector];
+                    let right_swid = self.swid_store.slice()[right_vector];
+                    if left_swid == swid {
+                        Some(left_vector)
+                    } else if right_swid == swid {
+                        Some(right_vector)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            },
             None => None,
         }
     }
     pub fn remove(&mut self, swid_to_remove: Swid) -> Result<(), ()> {
-        match self.id_from_swid.get(&swid_to_remove) {
-            Some(&swid_id) => {
-                let last = self.swid_store.slice().len() - 1;
-                let mut last_vector =
-                    self.vector_store.slice()[last * self.dimensions..].to_owned();
-                self.swid_store.slice_mut().swap(swid_id, last);
-                self.vector_store.slice_mut()
-                    [swid_id * self.dimensions..(swid_id + 1) * self.dimensions]
-                    .swap_with_slice(last_vector.as_mut_slice());
-                self.resize(-1);
-            }
+        let swid_id = match self.get_vector_id_by_swid(swid_to_remove) {
+            Some(id) => id,
             None => return Err(()),
+        };
+        let node_id_to_remove = *self.nodeid_from_swid.get(&swid_to_remove).unwrap();
+        // remove reference to swid_to_remove in the nodes
+        match self.nodes[node_id_to_remove] {
+            Node::Leaf2 {
+                left_vector,
+                right_vector,
+                parent,
+                ..
+            } => {
+                let left_swid = self.swid_store.slice()[left_vector];
+                let right_swid = self.swid_store.slice()[right_vector];
+                if left_swid == swid_to_remove {
+                    self.nodes[node_id_to_remove] = Node::Leaf1 {
+                        left_vector: right_vector,
+                        parent,
+                        middle: self.get_vector(right_vector).to_vec(),
+                    };
+                } else if right_swid == swid_to_remove {
+                    self.nodes[node_id_to_remove] = Node::Leaf1 {
+                        left_vector,
+                        parent,
+                        middle: self.get_vector(left_vector).to_vec(),
+                    };
+                }
+                // todo: recalculate middle
+            }
+            Node::Leaf1 {
+                parent, ref middle, ..
+            } => {
+                self.nodes[node_id_to_remove] = Node::Leaf0 {
+                    parent,
+                    middle: middle.to_vec(),
+                };
+            }
+            _ => {}
         }
-        self.nodes.clear();
-        self.id_from_swid.clear();
-        self.top_node = None;
-        for i in 0..self.swid_store.slice().len() {
-            self.index(i).unwrap();
+        let last_swid_id = self.swid_store.slice().len() - 1;
+        let last_swid = self.swid_store.slice()[last_swid_id];
+        //swap the last swid with the swid to remove
+        self.swid_store.slice_mut().swap(swid_id, last_swid_id);
+        //swap the last vector with the vector to remove
+        let mut last_vector =
+            self.vector_store.slice()[last_swid_id * self.dimensions..].to_owned();
+        self.vector_store.slice_mut()[swid_id * self.dimensions..(swid_id + 1) * self.dimensions]
+            .swap_with_slice(last_vector.as_mut_slice());
+        self.resize(-1);
+        // swap references to the last swid with the swid to remove
+        let last_node_id = *self.nodeid_from_swid.get(&last_swid).unwrap();
+        self.nodeid_from_swid.insert(swid_to_remove, last_node_id);
+        self.nodeid_from_swid.remove(&last_swid);
+        // replace last_swid_id with swid_id in the nodes
+        match self.nodes[last_node_id] {
+            Node::Leaf1 {
+                ref mut left_vector,
+                ..
+            } => {
+                if *left_vector == last_swid_id {
+                    *left_vector = swid_id;
+                }
+            }
+            Node::Leaf2 {
+                ref mut left_vector,
+                ref mut right_vector,
+                ..
+            } => {
+                if *left_vector == last_swid_id {
+                    *left_vector = swid_id;
+                } else if *right_vector == last_swid_id {
+                    *right_vector = swid_id;
+                }
+            }
+            _ => {}
         }
         Ok(())
     }
