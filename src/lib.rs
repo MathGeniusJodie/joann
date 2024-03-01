@@ -5,7 +5,6 @@ use std::{
     fmt::Debug,
     fs::{File, OpenOptions},
     path::Path,
-    vec,
 };
 type NodeID = usize;
 type Swid = u128;
@@ -277,14 +276,13 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
             .nth(vector_id)
             .unwrap()
     }
-    fn get_closest_leaf(&self, q: &[F]) -> Option<Vec<NodeID>> {
+    fn get_closest_leaf(&self, q: &[F]) -> Option<NodeID> {
         self.top_node?;
         let mut current_node = self.top_node.unwrap();
-        let mut parent_chain = vec![current_node];
         loop {
             (_, current_node) = match self.nodes[current_node] {
                 Node::Leaf1 { .. } | Node::Leaf2 { .. } | Node::Leaf0 { .. } => {
-                    return Some(parent_chain)
+                    return Some(current_node)
                 }
                 Node::Branch2 {
                     left_next,
@@ -303,7 +301,6 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                 ),
                 Node::Branch1 { left_next, .. } => (F::zero(), left_next),
             };
-            parent_chain.push(current_node);
         }
     }
     fn resize(&mut self, n: isize) {
@@ -344,9 +341,8 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
         &mut self,
         new_vector_id: Option<NodeID>,
         new_id: Option<NodeID>,
-        mut chain: Vec<NodeID>,
+        tip: NodeID
     ) {
-        let tip = chain.pop().unwrap();
         let id = tip;
         let new_center_id = match self.nodes[id] {
             Node::Leaf0 { parent, .. } => {
@@ -357,6 +353,9 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                 };
                 let swid = self.swid_store.slice()[new_vector_id.unwrap()];
                 self.nodeid_from_swid.insert(swid, id);
+                if self.nodes[id].parent().is_some() {
+                    self.recalculate_middle(self.nodes[id].parent().unwrap());
+                }
                 return;
             }
             Node::Leaf1 {
@@ -375,8 +374,8 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                         .map(|(&a, &b)| (a + b) * F::from(0.5).unwrap())
                         .collect(),
                 };
-                if !chain.is_empty() {
-                    self.recalculate_middle(*chain.last().unwrap());
+                if self.nodes[id].parent().is_some() {
+                    self.recalculate_middle(self.nodes[id].parent().unwrap());
                 }
                 let swid = self.swid_store.slice()[new_vector_id.unwrap()];
                 self.nodeid_from_swid.insert(swid, id);
@@ -396,8 +395,8 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                         .map(|(&a, &b)| (a + b) * F::from(0.5).unwrap())
                         .collect(),
                 };
-                if !chain.is_empty() {
-                    self.recalculate_middle(*chain.last().unwrap());
+                if self.nodes[id].parent().is_some() {
+                    self.recalculate_middle(self.nodes[id].parent().unwrap());
                 }
                 return;
             }
@@ -457,7 +456,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                 let new_center_id = self.nodes.len();
                 if new_distance < old_distance {
                     self.nodes[id] = Node::Branch2 {
-                        left_next: left_next,
+                        left_next,
                         right_next: new_id.unwrap(),
                         parent,
                         middle: self.nodes[left_next]
@@ -484,7 +483,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                 new_center_id
             }
         };
-        if chain.is_empty() {
+        if self.nodes[id].parent().is_none() {
             let new_parent_id = self.nodes.len();
             self.nodes.push(Node::Branch2 {
                 left_next: id,
@@ -497,9 +496,11 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                     .map(|(&a, &b)| (a + b) * F::from(0.5).unwrap())
                     .collect(),
             });
+            self.nodes[id].set_parent(Some(new_parent_id));
+            self.nodes[new_center_id].set_parent(Some(new_parent_id));
             self.top_node = Some(new_parent_id);
         } else {
-            self.push_child(None, Some(new_center_id), chain);
+            self.push_child(None, Some(new_center_id), self.nodes[id].parent().unwrap());
         }
     }
     fn recalculate_middle(&mut self, parent: NodeID) {
@@ -750,7 +751,7 @@ mod tests {
         );
         vptree.remove(32).unwrap();
         vptree.remove(4).unwrap();
-        //dbg!(&vptree);
+        dbg!(&vptree);
         assert_eq!(
             vptree.knn(&[0.0, 0.0], 3),
             vec![
