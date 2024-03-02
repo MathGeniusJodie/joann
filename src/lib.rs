@@ -4,6 +4,7 @@ use std::{
     collections::HashMap,
     fmt::Debug,
     fs::{File, OpenOptions},
+    iter::Sum,
     path::Path,
 };
 type NodeID = usize;
@@ -16,7 +17,7 @@ pub enum Distance {
     L2,
     IP,
 }
-fn get_distance<F: Float + Debug + Default>(a: &[F], b: &[F], space: Distance) -> F {
+fn get_distance<F: Float + Debug + Default + Sum>(a: &[F], b: &[F], space: Distance) -> F {
     #[cfg(target_feature = "avx")]
     const STRIDE: usize = 8;
     #[cfg(not(target_feature = "avx"))]
@@ -34,7 +35,7 @@ fn get_distance<F: Float + Debug + Default>(a: &[F], b: &[F], space: Distance) -
                     sum[i] = diff.mul_add(diff, sum[i]);
                 }
             }
-            let mut sum = sum.iter().fold(F::zero(), |acc, &x| acc + x);
+            let mut sum = sum.into_iter().sum();
             for i in 0..rem_a.len() {
                 let diff = rem_a[i] - rem_b[i];
                 sum = diff.mul_add(diff, sum);
@@ -143,7 +144,7 @@ impl<T: Default + Clone> Store<T> {
     }
 }
 #[derive(Debug)]
-pub struct VPTree<F: Float + Debug + Default> {
+pub struct Tree<F: Float + Debug + Default + Sum> {
     pub nodes: Vec<Node<F>>,
     pub dimensions: usize,
     pub vector_store: Store<F>,
@@ -166,6 +167,13 @@ pub enum Node<F> {
         parent: Option<NodeID>,
         middle: Vec<F>,
     },
+    Branch3 {
+        left_next: NodeID,
+        middle_next: NodeID,
+        right_next: NodeID,
+        parent: Option<NodeID>,
+        middle: Vec<F>,
+    },
     Leaf1 {
         left_vector: NodeID,
         parent: Option<NodeID>,
@@ -183,49 +191,42 @@ pub enum Node<F> {
     },
 }
 
-impl<F: Float + Debug + Default> Node<F> {
+impl<F: Float + Debug + Default + Sum> Node<F> {
     fn middle(&self) -> &[F] {
         match self {
-            Node::Branch2 { middle, .. } => middle,
-            Node::Leaf2 { middle, .. } => middle,
-            Node::Branch1 { middle, .. } => middle,
-            Node::Leaf1 { middle, .. } => middle,
-            Node::Leaf0 { middle, .. } => middle,
+            Node::Branch2 { middle, .. }
+            | Node::Branch3 { middle, .. }
+            | Node::Leaf2 { middle, .. }
+            | Node::Branch1 { middle, .. }
+            | Node::Leaf1 { middle, .. }
+            | Node::Leaf0 { middle, .. } => middle,
         }
     }
-    fn set_parent(&mut self, parent: Option<NodeID>) {
+    fn set_parent(&mut self, new_parent: Option<NodeID>) {
         match self {
-            Node::Branch2 {
-                parent: ref mut p, ..
-            } => *p = parent,
-            Node::Leaf2 {
-                parent: ref mut p, ..
-            } => *p = parent,
-            Node::Branch1 {
-                parent: ref mut p, ..
-            } => *p = parent,
-            Node::Leaf1 {
-                parent: ref mut p, ..
-            } => *p = parent,
-            Node::Leaf0 {
-                parent: ref mut p, ..
-            } => *p = parent,
+            Node::Branch2 { parent, .. }
+            | Node::Branch3 { parent, .. }
+            | Node::Leaf2 { parent, .. }
+            | Node::Branch1 { parent, .. }
+            | Node::Leaf1 { parent, .. }
+            | Node::Leaf0 { parent, .. } => *parent = new_parent,
         }
     }
     fn parent(&self) -> Option<NodeID> {
         match self {
-            Node::Branch2 { parent, .. } => *parent,
-            Node::Leaf2 { parent, .. } => *parent,
-            Node::Branch1 { parent, .. } => *parent,
-            Node::Leaf1 { parent, .. } => *parent,
-            Node::Leaf0 { parent, .. } => *parent,
+            Node::Branch2 { parent, .. }
+            | Node::Branch3 { parent, .. }
+            | Node::Leaf2 { parent, .. }
+            | Node::Branch1 { parent, .. }
+            | Node::Leaf1 { parent, .. }
+            | Node::Leaf0 { parent, .. } => *parent,
         }
     }
 }
 
-impl<'a, F: Float + Debug + Default> VPTree<F> {
-    pub fn new(space: Distance, dimensions: usize) -> VPTree<F> {
-        VPTree {
+impl<'a, F: Float + Debug + Default + Sum> Tree<F> {
+    pub fn new(space: Distance, dimensions: usize) -> Tree<F> {
+        Tree {
             nodes: Vec::new(),
             dimensions,
             vector_store: Store::Vec(Vec::new()),
@@ -240,7 +241,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
         dimensions: usize,
         vector_store: &Path,
         swid_store: &Path,
-    ) -> VPTree<F> {
+    ) -> Tree<F> {
         let vector_file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -255,7 +256,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
             .unwrap();
         let vector_mmap = unsafe { MmapMut::map_mut(&vector_file).unwrap() };
         let swid_mmap = unsafe { MmapMut::map_mut(&swid_file).unwrap() };
-        let mut tree: VPTree<F> = VPTree {
+        let mut tree: Tree<F> = Tree {
             nodes: Vec::new(),
             dimensions,
             vector_store: Store::Mmap((vector_file, vector_mmap)),
@@ -278,30 +279,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
     }
     fn get_closest_leaf(&self, q: &[F]) -> Option<NodeID> {
         self.top_node?;
-        let mut current_node = self.top_node.unwrap();
-        loop {
-            (_, current_node) = match self.nodes[current_node] {
-                Node::Leaf1 { .. } | Node::Leaf2 { .. } | Node::Leaf0 { .. } => {
-                    return Some(current_node)
-                }
-                Node::Branch2 {
-                    left_next,
-                    right_next,
-                    ..
-                } => std::cmp::min_by(
-                    (
-                        get_distance(q, self.nodes[right_next].middle(), self.space),
-                        right_next,
-                    ),
-                    (
-                        get_distance(q, self.nodes[left_next].middle(), self.space),
-                        left_next,
-                    ),
-                    |a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal),
-                ),
-                Node::Branch1 { left_next, .. } => (F::zero(), left_next),
-            };
-        }
+        self.knn(q, 1).first().map(|(swid, _)| *self.nodeid_from_swid.get(swid).unwrap())
     }
     fn resize(&mut self, n: isize) {
         self.vector_store.resize(n * self.dimensions as isize);
@@ -337,12 +315,7 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
         }
         Ok(())
     }
-    fn push_child(
-        &mut self,
-        new_vector_id: Option<NodeID>,
-        new_id: Option<NodeID>,
-        tip: NodeID
-    ) {
+    fn push_child(&mut self, new_vector_id: Option<NodeID>, new_id: Option<NodeID>, tip: NodeID) {
         let id = tip;
         let new_center_id = match self.nodes[id] {
             Node::Leaf0 { parent, .. } => {
@@ -449,37 +422,56 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                 parent,
                 ref middle,
             } => {
-                let new_distance =
-                    get_distance(self.nodes[new_id.unwrap()].middle(), middle, self.space);
-                let old_distance =
-                    get_distance(self.nodes[right_next].middle(), &middle, self.space);
-                let new_center_id = self.nodes.len();
-                if new_distance < old_distance {
-                    self.nodes[id] = Node::Branch2 {
-                        left_next,
-                        right_next: new_id.unwrap(),
-                        parent,
-                        middle: self.nodes[left_next]
-                            .middle()
-                            .iter()
-                            .zip(self.nodes[new_id.unwrap()].middle())
-                            .map(|(&a, &b)| (a + b) * F::from(0.5).unwrap())
-                            .collect(),
-                    };
-                    self.nodes.push(Node::Branch1 {
-                        left_next: right_next,
-                        parent,
-                        middle: self.nodes[right_next].middle().to_vec(),
-                    });
-                    self.nodes[right_next].set_parent(Some(new_center_id));
-                } else {
-                    self.nodes.push(Node::Branch1 {
-                        left_next: new_id.unwrap(),
-                        parent,
-                        middle: self.nodes[new_id.unwrap()].middle().to_vec(),
-                    });
-                    self.nodes[new_id.unwrap()].set_parent(Some(new_center_id));
+                self.nodes[id] = Node::Branch3 {
+                    left_next: left_next,
+                    right_next: right_next,
+                    middle_next: new_id.unwrap(),
+                    parent,
+                    middle: self.nodes[left_next]
+                        .middle()
+                        .iter()
+                        .zip(self.nodes[right_next].middle())
+                        .zip(self.nodes[new_id.unwrap()].middle())
+                        .map(|((&a, &b), &c)| (a + b + c) * F::from(1.0 / 3.0).unwrap())
+                        .collect(),
+                };
+                if self.nodes[id].parent().is_some() {
+                    self.recalculate_middle(self.nodes[id].parent().unwrap());
                 }
+                return;
+            }
+            Node::Branch3 { left_next, middle_next, right_next, parent, ref middle } => {
+                let mut children: [(NodeID, F); 4] = [
+                    (left_next,get_distance(self.nodes[left_next].middle(), middle, self.space)),
+                    (middle_next,get_distance(self.nodes[middle_next].middle(), middle, self.space)),
+                    (right_next,get_distance(self.nodes[right_next].middle(), middle, self.space)),
+                    (new_id.unwrap(),get_distance(self.nodes[new_id.unwrap()].middle(), middle, self.space)),
+                ];
+                children.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                let new_center_id = self.nodes.len();
+                // split 4 children into 2 sets of 2
+                self.nodes[id] = Node::Branch2 {
+                    left_next: children[0].0,
+                    right_next: children[1].0,
+                    parent,
+                    middle: self.nodes[children[0].0]
+                        .middle()
+                        .iter()
+                        .zip(self.nodes[children[1].0].middle())
+                        .map(|(&a, &b)| (a + b) * F::from(0.5).unwrap())
+                        .collect(),
+                };
+                self.nodes.push(Node::Branch2 {
+                    left_next: children[2].0,
+                    right_next: children[3].0,
+                    parent,
+                    middle: self.nodes[children[2].0]
+                        .middle()
+                        .iter()
+                        .zip(self.nodes[children[3].0].middle())
+                        .map(|(&a, &b)| (a + b) * F::from(0.5).unwrap())
+                        .collect(),
+                });
                 new_center_id
             }
         };
@@ -515,6 +507,18 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                 .iter()
                 .zip(self.nodes[right_next].middle())
                 .map(|(&a, &b)| (a + b) * F::from(0.5).unwrap())
+                .collect(),
+            Node::Branch3 {
+                left_next,
+                middle_next,
+                right_next,
+                ..
+            } => self.nodes[left_next]
+                .middle()
+                .iter()
+                .zip(self.nodes[middle_next].middle())
+                .zip(self.nodes[right_next].middle())
+                .map(|((&a, &b), &c)| (a + b + c) * F::from(1.0 / 3.0).unwrap())
                 .collect(),
             _ => unreachable!(),
         };
@@ -600,6 +604,19 @@ impl<'a, F: Float + Debug + Default> VPTree<F> {
                     stack.push((left_next, distance));
                     let distance = get_distance(q, self.nodes[right_next].middle(), self.space);
                     stack.push((right_next, distance));
+                }
+                Node::Branch3 {
+                    left_next,
+                    middle_next,
+                    right_next,
+                    ..
+                } => {
+                    let distance = get_distance(q, self.nodes[left_next].middle(), self.space);
+                    stack.push((left_next, distance));
+                    let distance = get_distance(q, self.nodes[right_next].middle(), self.space);
+                    stack.push((right_next, distance));
+                    let distance = get_distance(q, self.nodes[middle_next].middle(), self.space);
+                    stack.push((middle_next, distance));
                 }
             }
             stack.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -728,32 +745,32 @@ mod tests {
     use rand::Rng;
 
     #[test]
-    fn test_vp_tree() {
-        let mut vptree = VPTree::<f64>::new(Distance::Euclidean, 2);
-        vptree.insert(&[3.0, 3.0], 4).unwrap();
-        vptree.insert(&[4.0, 4.0], 352).unwrap();
-        vptree.insert(&[5.0, 5.0], 43).unwrap();
-        vptree.insert(&[6.0, 6.0], 41).unwrap();
-        vptree.insert(&[7.0, 7.0], 35).unwrap();
-        vptree.insert(&[8.0, 8.0], 52).unwrap();
-        vptree.insert(&[9.0, 9.0], 42).unwrap();
-        vptree.insert(&[0.0, 0.0], 32).unwrap();
-        vptree.insert(&[1.0, 1.0], 222).unwrap();
-        vptree.insert(&[2.0, 2.0], 567).unwrap();
-        //dbg!(&vptree);
+    fn test_tree() {
+        let mut tree = Tree::<f64>::new(Distance::Euclidean, 2);
+        tree.insert(&[3.0, 3.0], 4).unwrap();
+        tree.insert(&[4.0, 4.0], 352).unwrap();
+        tree.insert(&[5.0, 5.0], 43).unwrap();
+        tree.insert(&[6.0, 6.0], 41).unwrap();
+        tree.insert(&[7.0, 7.0], 35).unwrap();
+        tree.insert(&[8.0, 8.0], 52).unwrap();
+        tree.insert(&[9.0, 9.0], 42).unwrap();
+        tree.insert(&[0.0, 0.0], 32).unwrap();
+        tree.insert(&[1.0, 1.0], 222).unwrap();
+        tree.insert(&[2.0, 2.0], 567).unwrap();
+        //dbg!(&tree);
         assert_eq!(
-            vptree.knn(&[0.0, 0.0], 3),
+            tree.knn(&[0.0, 0.0], 3),
             vec![
                 (32, 0.0),
                 (222, std::f64::consts::SQRT_2),
                 (567, 2.0 * std::f64::consts::SQRT_2)
             ]
         );
-        vptree.remove(32).unwrap();
-        vptree.remove(4).unwrap();
-        dbg!(&vptree);
+        tree.remove(32).unwrap();
+        tree.remove(4).unwrap();
+        //dbg!(&tree);
         assert_eq!(
-            vptree.knn(&[0.0, 0.0], 3),
+            tree.knn(&[0.0, 0.0], 3),
             vec![
                 (222, std::f64::consts::SQRT_2),
                 (567, 2.0 * std::f64::consts::SQRT_2),
@@ -762,50 +779,52 @@ mod tests {
         );
     }
     const BENCH_DIMENSIONS: usize = 300;
+    const LINEAR_SEARCH_SIZE: usize = 1000;
+    const LINEAR_SEARCH_TOPK: usize = 500;
     #[test]
-    fn test_10000() {
+    fn test_LINEAR_SEARCH_SIZE() {
         use microbench::*;
-        let mut vptree = VPTree::<f32>::new(Distance::Euclidean, BENCH_DIMENSIONS);
+        let mut tree = Tree::<f32>::new(Distance::Euclidean, BENCH_DIMENSIONS);
+        
+        let mut rng = rand::thread_rng();
+        let mut vectors = Vec::with_capacity(LINEAR_SEARCH_SIZE);
+        vectors.resize_with(LINEAR_SEARCH_SIZE, ||{
+            let mut vector: Vec<f32> = Vec::with_capacity(BENCH_DIMENSIONS);
+            vector.resize_with(BENCH_DIMENSIONS, || rng.gen::<f32>());
+            vector
+        });
+
+        vectors.iter().enumerate().for_each(|(i, vector)| {
+            tree.insert(&vector, i as Swid).unwrap();
+
+        });
+
+        println!("nodes: {}", tree.nodes.len());
+
         let bench_options = Options::default();
         microbench::bench(&bench_options, "insert", || {
-            for i in 0..10000 {
-                let vector = vec![i as f32; BENCH_DIMENSIONS];
-                vptree.insert(&vector, i).unwrap();
-            }
-            vptree = VPTree::<f32>::new(Distance::Euclidean, BENCH_DIMENSIONS);
+            vectors.iter().enumerate().for_each(|(i, vector)| {
+                tree.insert(&vector, i as Swid).unwrap();
+            });
+            tree = Tree::<f32>::new(Distance::Euclidean, BENCH_DIMENSIONS);
         });
-        for i in 0..10000 {
-            let vector = vec![i as f32; BENCH_DIMENSIONS];
-            vptree.insert(&vector, i).unwrap();
-        }
+        vectors.iter().enumerate().for_each(|(i, vector)| {
+            tree.insert(&vector, i as Swid).unwrap();
+        });
         microbench::bench(&bench_options, "knn_topk1", || {
-            for i in 0..10000 {
-                let vector = vec![i as f32; BENCH_DIMENSIONS];
-                vptree.knn(&vector, 1);
+            for i in 0..LINEAR_SEARCH_SIZE {
+                let vector = vectors[i].as_slice();
+                tree.knn(&vector, 1);
             }
         });
         microbench::bench(&bench_options, "knn_topk10", || {
-            for i in 0..10000 {
-                let vector = vec![i as f32; BENCH_DIMENSIONS];
-                vptree.knn(&vector, 10);
+            for i in 0..LINEAR_SEARCH_SIZE {
+                let vector = vectors[i].as_slice();
+                tree.knn(&vector, 10);
             }
         });
-        microbench::bench(&bench_options, "knn_topk100", || {
-            for i in 0..10000 {
-                let vector = vec![i as f32; BENCH_DIMENSIONS];
-                vptree.knn(&vector, 100);
-            }
-        });
-        microbench::bench(&bench_options, "knn_topk1000", || {
-            for i in 0..10000 {
-                let vector = vec![i as f32; BENCH_DIMENSIONS];
-                vptree.knn(&vector, 1000);
-            }
-        });
+    
     }
-
-    const LINEAR_SEARCH_SIZE: usize = 2000;
-    const LINEAR_SEARCH_TOPK: usize = 1000;
     #[test]
     /*
     fn repeatedly_test_vs_linear_search() {
@@ -814,27 +833,25 @@ mod tests {
         }
     }*/
     fn test_vs_linear_search() {
-        //make LINEAR_SEARCH_SIZE random 300 dimensional vectors
         let mut rng = rand::thread_rng();
-        let mut vectors = Vec::new();
-        for _ in 0..LINEAR_SEARCH_SIZE {
-            let vector: Vec<f32> = (0..300).map(|_| rng.gen_range(-100.0..100.0)).collect();
-            //divide each vector by 100
-            let vector: Vec<f32> = vector.iter().map(|x| x / 100.0).collect();
-            vectors.push(vector);
-        }
+        let mut vectors = Vec::with_capacity(LINEAR_SEARCH_SIZE);
+        vectors.resize_with(LINEAR_SEARCH_SIZE, ||{
+            let mut vector: Vec<f32> = Vec::with_capacity(BENCH_DIMENSIONS);
+            vector.resize_with(BENCH_DIMENSIONS, || rng.gen::<f32>());
+            vector
+        });
 
-        //build a vptree
-        let mut vptree = VPTree::<f32>::new(Distance::Euclidean, BENCH_DIMENSIONS);
+        //build a tree
+        let mut tree = Tree::<f32>::new(Distance::Euclidean, BENCH_DIMENSIONS);
         for (i, vector) in vectors.iter().enumerate() {
-            vptree.insert(vector, i as u128).unwrap();
+            tree.insert(vector, i as u128).unwrap();
         }
 
         //get random vector for sampling
         let random_vector = &vectors[0];
 
         //topk LINEAR_SEARCH_TOPK
-        let topk = vptree.knn(random_vector, LINEAR_SEARCH_TOPK);
+        let topk = tree.knn(random_vector, LINEAR_SEARCH_TOPK);
 
         //linear search topk LINEAR_SEARCH_TOPK
         let mut linear_search_topk = Vec::new();
