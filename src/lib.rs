@@ -1,7 +1,6 @@
 use memmap2::MmapMut;
 use num_traits::Float;
 use std::{
-    collections::HashMap,
     fmt::Debug,
     fs::{File, OpenOptions},
     iter::Sum,
@@ -180,8 +179,8 @@ impl<F: Float + Debug + Default + Sum> Ord for Neighbor<F> {
 pub struct Index<F: Float + Debug + Default + Sum> {
     pub layers: [Vec<Node<F>>; MAX_LAYER],
     pub dimensions: usize,
-    pub swid_layer: Vec<Swid>,
-    pub vector_layer: Vec<F>,
+    pub swid_layer: Store<Swid>,
+    pub vector_layer: Store<F>,
     ef_construction: usize,
     space: Distance,
     m: usize,
@@ -218,16 +217,65 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
         Index {
             layers,
             dimensions,
-            swid_layer: Vec::new(),
-            vector_layer: Vec::new(),
+            swid_layer: Store::Vec(Vec::new()),
+            vector_layer: Store::Vec(Vec::new()),
             ef_construction,
             space,
             m,
         }
     }
+    pub fn new_with_store(
+        ef_construction: usize,
+        space: Distance,
+        dimensions: usize,
+        m: usize,
+        vector_store: &Path,
+        swid_store: &Path,
+    ) -> Index<F> {
+        let vector_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(vector_store)
+            .unwrap();
+        let swid_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(swid_store)
+            .unwrap();
+        let vector_mmap = unsafe { MmapMut::map_mut(&vector_file).unwrap() };
+        let swid_mmap = unsafe { MmapMut::map_mut(&swid_file).unwrap() };
+
+        let mut index = Index {
+            layers: Default::default(),
+            dimensions,
+            swid_layer: Store::Mmap((swid_file, swid_mmap)),
+            vector_layer: Store::Mmap((vector_file, vector_mmap)),
+            ef_construction,
+            space,
+            m,
+        };
+        for i in 0..index.swid_layer.slice().len() {
+            let q = index.vector_layer.slice()[i * index.dimensions..(i + 1) * index.dimensions].to_owned();
+            index.index(&q, i);
+        }
+        index
+    }
     pub fn insert(&mut self, q: &[F], swid: Swid) {
+        let id = self.swid_layer.slice().len();
+        self.index(q, id);
+        self.swid_layer.resize(1);
+        self.swid_layer.slice_mut()[id] = swid;
+        self.vector_layer.resize(self.dimensions as isize);
+        self.vector_layer
+            .slice_mut()
+            [(id * self.dimensions)..((id + 1) * self.dimensions)]
+            .copy_from_slice(q);
+    }
+    fn index(&mut self, q: &[F], id: NodeID) {
         let l =
-            ((-rand::random::<f64>().ln() * (1.0f64 / 16.0f64.ln())) as usize).min(MAX_LAYER - 1);
+        ((-rand::random::<f64>().ln() * (1.0f64 / 16.0f64.ln())) as usize).min(MAX_LAYER - 1);
         let mut ep = 0;
         for lc in (l + 1..MAX_LAYER).rev() {
             ep = match self.search_layer(q, ep, 1, lc).first() {
@@ -249,7 +297,7 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
                 self.layers[lc][neighbor.id].neighbors.truncate(self.m);
             }
             let lower_id = if lc == 0 {
-                self.swid_layer.len()
+                id
             } else {
                 self.layers[lc - 1].len()
             };
@@ -262,23 +310,23 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
                 lower_id,
             });
         }
-        self.swid_layer.push(swid);
-        self.vector_layer.extend_from_slice(q);
     }
     pub fn remove(&mut self, swid_to_remove: Swid) {
-        let mut new_hnsw: Index<F> =
-            Index::new(self.ef_construction, self.space, self.dimensions, self.m);
-        self.swid_layer
-            .iter()
-            .zip(self.vector_layer.chunks(self.dimensions))
-            .for_each(|(swid, vector)| {
-                if *swid != swid_to_remove {
-                    new_hnsw.insert(vector, *swid);
-                }
-            });
-        self.layers = new_hnsw.layers;
-        self.swid_layer = new_hnsw.swid_layer;
-        self.vector_layer = new_hnsw.vector_layer;
+        let last = self.swid_layer.slice().len() - 1;
+        let mut last_vector = self.vector_layer.slice()[last * self.dimensions..].to_owned();
+        let id_to_remove = self.swid_layer.slice().iter().position(|&x| x == swid_to_remove).unwrap();
+        self.swid_layer.slice_mut().swap(id_to_remove, last);
+        self.vector_layer
+            .slice_mut()
+            [id_to_remove * self.dimensions..(id_to_remove + 1) * self.dimensions]
+            .swap_with_slice(&mut last_vector);
+        self.vector_layer.resize(self.dimensions as isize * -1);
+        self.swid_layer.resize(-1);
+        self.layers.iter_mut().for_each(|layer| layer.clear());
+        for i in 0..last {
+            let q = self.vector_layer.slice()[i * self.dimensions..(i + 1) * self.dimensions].to_owned();
+            self.index(&q, i);
+        }
     }
     fn search_layer(&self, q: &[F], ep: usize, ef: usize, layer: usize) -> Vec<Neighbor<F>> {
         if ef > self.layers[layer].len() {
@@ -341,7 +389,7 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
     fn get_swid(&self, layer: usize, id: NodeID) -> Swid {
         let lower = self.layers[layer][id].lower_id;
         if layer == 0 {
-            self.swid_layer[lower]
+            self.swid_layer.slice()[lower]
         } else {
             self.get_swid(layer - 1, lower)
         }
@@ -350,6 +398,7 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
         let lower = self.layers[layer][id].lower_id;
         if layer == 0 {
             self.vector_layer
+                .slice()
                 .chunks(self.dimensions)
                 .nth(lower)
                 .unwrap()
@@ -374,602 +423,6 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
     }
 }
 
-/* 
-#[derive(Debug)]
-pub struct Index<F: Float + Debug + Default + Sum + Sum> {
-    pub nodes: Vec<Node<F>>,
-    pub dimensions: usize,
-    pub vector_store: Store<F>,
-    pub swid_store: Store<Swid>,
-    pub nodeid_from_swid: HashMap<Swid, NodeID>,
-    space: Distance,
-    top_node: Option<NodeID>,
-}
-
-#[derive(Debug)]
-pub enum Node<F> {
-    Branch1 {
-        left_next: NodeID,
-        parent: Option<NodeID>,
-        middle: Vec<F>,
-    },
-    Branch2 {
-        left_next: NodeID,
-        right_next: NodeID,
-        parent: Option<NodeID>,
-        middle: Vec<F>,
-    },
-    Branch3 {
-        left_next: NodeID,
-        middle_next: NodeID,
-        right_next: NodeID,
-        parent: Option<NodeID>,
-        middle: Vec<F>,
-    },
-    Leaf1 {
-        left_vector: NodeID,
-        parent: Option<NodeID>,
-        middle: Vec<F>,
-    },
-    Leaf2 {
-        left_vector: NodeID,
-        right_vector: NodeID,
-        parent: Option<NodeID>,
-        middle: Vec<F>,
-    },
-    Leaf0 {
-        parent: Option<NodeID>,
-        middle: Vec<F>,
-    },
-}
-
-impl<F: Float + Debug + Default + Sum + Sum> Node<F> {
-    fn middle(&self) -> &[F] {
-        match self {
-            Node::Branch2 { middle, .. }
-            | Node::Branch3 { middle, .. }
-            | Node::Leaf2 { middle, .. }
-            | Node::Branch1 { middle, .. }
-            | Node::Leaf1 { middle, .. }
-            | Node::Leaf0 { middle, .. } => middle,
-        }
-    }
-    fn set_parent(&mut self, new_parent: Option<NodeID>) {
-        match self {
-            Node::Branch2 { parent, .. }
-            | Node::Branch3 { parent, .. }
-            | Node::Leaf2 { parent, .. }
-            | Node::Branch1 { parent, .. }
-            | Node::Leaf1 { parent, .. }
-            | Node::Leaf0 { parent, .. } => *parent = new_parent,
-        }
-    }
-    fn parent(&self) -> Option<NodeID> {
-        match self {
-            Node::Branch2 { parent, .. }
-            | Node::Branch3 { parent, .. }
-            | Node::Leaf2 { parent, .. }
-            | Node::Branch1 { parent, .. }
-            | Node::Leaf1 { parent, .. }
-            | Node::Leaf0 { parent, .. } => *parent,
-        }
-    }
-}
-
-impl<'a, F: Float + Debug + Default + Sum> Index<F> {
-    pub fn new(space: Distance, dimensions: usize) -> Index<F> {
-        Index {
-            nodes: Vec::new(),
-            dimensions,
-            vector_store: Store::Vec(Vec::new()),
-            swid_store: Store::Vec(Vec::new()),
-            nodeid_from_swid: HashMap::new(),
-            space,
-            top_node: None,
-        }
-    }
-    pub fn new_with_store(
-        space: Distance,
-        dimensions: usize,
-        vector_store: &Path,
-        swid_store: &Path,
-    ) -> Index<F> {
-        let vector_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(vector_store)
-            .unwrap();
-        let swid_file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(swid_store)
-            .unwrap();
-        let vector_mmap = unsafe { MmapMut::map_mut(&vector_file).unwrap() };
-        let swid_mmap = unsafe { MmapMut::map_mut(&swid_file).unwrap() };
-        let mut tree: Index<F> = Index {
-            nodes: Vec::new(),
-            dimensions,
-            vector_store: Store::Mmap((vector_file, vector_mmap)),
-            swid_store: Store::Mmap((swid_file, swid_mmap)),
-            nodeid_from_swid: HashMap::new(),
-            space,
-            top_node: None,
-        };
-        for i in 0..tree.swid_store.slice().len() {
-            tree.index(i).unwrap()
-        }
-        tree
-    }
-    fn get_vector(&self, vector_id: NodeID) -> &[F] {
-        self.vector_store
-            .slice()
-            .chunks(self.dimensions)
-            .nth(vector_id)
-            .unwrap()
-    }
-    fn get_closest_leaf(&self, q: &[F]) -> Option<NodeID> {
-        self.top_node?;
-        self.knn(q, 1).first().map(|(swid, _)| *self.nodeid_from_swid.get(swid).unwrap())
-    }
-    fn resize(&mut self, n: isize) {
-        self.vector_store.resize(n * self.dimensions as isize);
-        self.swid_store.resize(n);
-    }
-    pub fn insert(&mut self, q: &[F], swid: Swid) -> Result<(), ()> {
-        let swid_id = self.swid_store.slice().len();
-        let vector_id = swid_id;
-        self.resize(1);
-        self.swid_store.slice_mut()[swid_id] = swid;
-        self.vector_store.slice_mut()
-            [(vector_id * self.dimensions)..((vector_id + 1) * self.dimensions)]
-            .copy_from_slice(q);
-        self.index(vector_id)
-    }
-    pub fn index(&mut self, vector_id: NodeID) -> Result<(), ()> {
-        let q = self.get_vector(vector_id).to_vec();
-        let swid = self.swid_store.slice()[vector_id];
-        let closest_leaf = self.get_closest_leaf(&q);
-        match closest_leaf {
-            Some(leaf_chain) => {
-                self.push_child(Some(vector_id), None, leaf_chain);
-            }
-            None => {
-                self.top_node = Some(0);
-                self.nodes.push(Node::Leaf1 {
-                    left_vector: vector_id,
-                    parent: None,
-                    middle: q,
-                });
-                self.nodeid_from_swid.insert(swid, 0);
-            }
-        }
-        Ok(())
-    }
-    fn push_child(&mut self, new_vector_id: Option<NodeID>, new_id: Option<NodeID>, tip: NodeID) {
-        let id = tip;
-        let new_center_id = match self.nodes[id] {
-            Node::Leaf0 { parent, .. } => {
-                self.nodes[id] = Node::Leaf1 {
-                    left_vector: new_vector_id.unwrap(),
-                    parent,
-                    middle: self.get_vector(new_vector_id.unwrap()).to_vec(),
-                };
-                let swid = self.swid_store.slice()[new_vector_id.unwrap()];
-                self.nodeid_from_swid.insert(swid, id);
-                if self.nodes[id].parent().is_some() {
-                    self.recalculate_middle(self.nodes[id].parent().unwrap());
-                }
-                return;
-            }
-            Node::Leaf1 {
-                left_vector,
-                parent,
-                ..
-            } => {
-                self.nodes[id] = Node::Leaf2 {
-                    left_vector: left_vector,
-                    right_vector: new_vector_id.unwrap(),
-                    parent,
-                    middle: self
-                        .get_vector(new_vector_id.unwrap())
-                        .iter()
-                        .zip(self.get_vector(left_vector))
-                        .map(|(&a, &b)| (a + b) * F::from(0.5).unwrap())
-                        .collect(),
-                };
-                if self.nodes[id].parent().is_some() {
-                    self.recalculate_middle(self.nodes[id].parent().unwrap());
-                }
-                let swid = self.swid_store.slice()[new_vector_id.unwrap()];
-                self.nodeid_from_swid.insert(swid, id);
-                return;
-            }
-            Node::Branch1 {
-                left_next, parent, ..
-            } => {
-                self.nodes[id] = Node::Branch2 {
-                    left_next: left_next,
-                    right_next: new_id.unwrap(),
-                    parent,
-                    middle: self.nodes[left_next]
-                        .middle()
-                        .iter()
-                        .zip(self.nodes[new_id.unwrap()].middle())
-                        .map(|(&a, &b)| (a + b) * F::from(0.5).unwrap())
-                        .collect(),
-                };
-                if self.nodes[id].parent().is_some() {
-                    self.recalculate_middle(self.nodes[id].parent().unwrap());
-                }
-                return;
-            }
-            Node::Leaf2 {
-                left_vector,
-                right_vector,
-                parent,
-                ref middle,
-                ..
-            } => {
-                let new_distance =
-                    get_distance(self.get_vector(new_vector_id.unwrap()), middle, self.space);
-                let old_distance = get_distance(self.get_vector(right_vector), &middle, self.space);
-                let new_center_id = self.nodes.len();
-                if new_distance < old_distance {
-                    self.nodes[id] = Node::Leaf2 {
-                        left_vector: left_vector,
-                        right_vector: new_vector_id.unwrap(),
-                        parent,
-                        middle: self
-                            .get_vector(new_vector_id.unwrap())
-                            .iter()
-                            .zip(self.get_vector(left_vector))
-                            .map(|(&a, &b)| (a + b) * F::from(0.5).unwrap())
-                            .collect(),
-                    };
-                    self.nodes.push(Node::Leaf1 {
-                        left_vector: right_vector,
-                        parent,
-                        middle: self.get_vector(right_vector).to_vec(),
-                    });
-                    let swid = self.swid_store.slice()[new_vector_id.unwrap()];
-                    self.nodeid_from_swid.insert(swid, id);
-                    let swid = self.swid_store.slice()[right_vector];
-                    self.nodeid_from_swid.insert(swid, new_center_id);
-                } else {
-                    self.nodes.push(Node::Leaf1 {
-                        left_vector: new_vector_id.unwrap(),
-                        parent,
-                        middle: self.get_vector(new_vector_id.unwrap()).to_vec(),
-                    });
-                    let swid = self.swid_store.slice()[new_vector_id.unwrap()];
-                    self.nodeid_from_swid.insert(swid, new_center_id);
-                }
-                new_center_id
-            }
-            Node::Branch2 {
-                left_next,
-                right_next,
-                parent,
-                ref middle,
-            } => {
-                self.nodes[id] = Node::Branch3 {
-                    left_next: left_next,
-                    right_next: right_next,
-                    middle_next: new_id.unwrap(),
-                    parent,
-                    middle: self.nodes[left_next]
-                        .middle()
-                        .iter()
-                        .zip(self.nodes[right_next].middle())
-                        .zip(self.nodes[new_id.unwrap()].middle())
-                        .map(|((&a, &b), &c)| (a + b + c) * F::from(1.0 / 3.0).unwrap())
-                        .collect(),
-                };
-                if self.nodes[id].parent().is_some() {
-                    self.recalculate_middle(self.nodes[id].parent().unwrap());
-                }
-                return;
-            }
-            Node::Branch3 { left_next, middle_next, right_next, parent, ref middle } => {
-                let mut children: [(NodeID, F); 4] = [
-                    (left_next,get_distance(self.nodes[left_next].middle(), middle, self.space)),
-                    (middle_next,get_distance(self.nodes[middle_next].middle(), middle, self.space)),
-                    (right_next,get_distance(self.nodes[right_next].middle(), middle, self.space)),
-                    (new_id.unwrap(),get_distance(self.nodes[new_id.unwrap()].middle(), middle, self.space)),
-                ];
-                children.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-                let new_center_id = self.nodes.len();
-                // split 4 children into 2 sets of 2
-                self.nodes[id] = Node::Branch2 {
-                    left_next: children[0].0,
-                    right_next: children[1].0,
-                    parent,
-                    middle: self.nodes[children[0].0]
-                        .middle()
-                        .iter()
-                        .zip(self.nodes[children[1].0].middle())
-                        .map(|(&a, &b)| (a + b) * F::from(0.5).unwrap())
-                        .collect(),
-                };
-                self.nodes.push(Node::Branch2 {
-                    left_next: children[2].0,
-                    right_next: children[3].0,
-                    parent,
-                    middle: self.nodes[children[2].0]
-                        .middle()
-                        .iter()
-                        .zip(self.nodes[children[3].0].middle())
-                        .map(|(&a, &b)| (a + b) * F::from(0.5).unwrap())
-                        .collect(),
-                });
-                new_center_id
-            }
-        };
-        if self.nodes[id].parent().is_none() {
-            let new_parent_id = self.nodes.len();
-            self.nodes.push(Node::Branch2 {
-                left_next: id,
-                right_next: new_center_id,
-                parent: None,
-                middle: self.nodes[id]
-                    .middle()
-                    .iter()
-                    .zip(self.nodes[new_center_id].middle())
-                    .map(|(&a, &b)| (a + b) * F::from(0.5).unwrap())
-                    .collect(),
-            });
-            self.nodes[id].set_parent(Some(new_parent_id));
-            self.nodes[new_center_id].set_parent(Some(new_parent_id));
-            self.top_node = Some(new_parent_id);
-        } else {
-            self.push_child(None, Some(new_center_id), self.nodes[id].parent().unwrap());
-        }
-    }
-    fn recalculate_middle(&mut self, parent: NodeID) {
-        let new_middle = match self.nodes[parent] {
-            Node::Branch1 { left_next, .. } => self.nodes[left_next].middle().to_vec(),
-            Node::Branch2 {
-                left_next,
-                right_next,
-                ..
-            } => self.nodes[left_next]
-                .middle()
-                .iter()
-                .zip(self.nodes[right_next].middle())
-                .map(|(&a, &b)| (a + b) * F::from(0.5).unwrap())
-                .collect(),
-            Node::Branch3 {
-                left_next,
-                middle_next,
-                right_next,
-                ..
-            } => self.nodes[left_next]
-                .middle()
-                .iter()
-                .zip(self.nodes[middle_next].middle())
-                .zip(self.nodes[right_next].middle())
-                .map(|((&a, &b), &c)| (a + b + c) * F::from(1.0 / 3.0).unwrap())
-                .collect(),
-            _ => unreachable!(),
-        };
-        match self.nodes[parent] {
-            Node::Branch1 { ref mut middle, .. } => {
-                *middle = new_middle;
-            }
-            Node::Branch2 { ref mut middle, .. } => {
-                *middle = new_middle;
-            }
-            _ => {}
-        }
-        if self.nodes[parent].parent().is_some() {
-            self.recalculate_middle(self.nodes[parent].parent().unwrap());
-        }
-    }
-    pub fn knn(&self, q: &[F], k: usize) -> Vec<(Swid, F)> {
-        let mut count = 0;
-        let mut result = self.search(q, |_| {
-            count += 1;
-            (false, count > k + 1)
-        });
-        result.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        result.truncate(k);
-        result
-    }
-    pub fn search(
-        &self,
-        q: &[F],
-        mut filter: impl FnMut((Swid, F)) -> (bool, bool),
-    ) -> Vec<(Swid, F)> {
-        let mut result: Vec<(u128, F)> = Vec::new();
-        let mut current_id = self.top_node.unwrap();
-        let mut stack: Vec<(usize, F)> = Vec::new();
-        loop {
-            match self.nodes[current_id] {
-                Node::Leaf0 { .. } => {}
-                Node::Leaf1 { left_vector, .. } => {
-                    let distance = get_distance(q, self.get_vector(left_vector), self.space);
-                    let tuple = (self.swid_store.slice()[left_vector], distance);
-                    let (continue_flag, break_flag) = filter(tuple);
-                    if break_flag {
-                        break;
-                    }
-                    if !continue_flag {
-                        result.push(tuple);
-                    }
-                }
-                Node::Branch1 { left_next, .. } => {
-                    let distance = get_distance(q, self.nodes[left_next].middle(), self.space);
-                    stack.push((left_next, distance));
-                }
-                Node::Leaf2 {
-                    left_vector,
-                    right_vector,
-                    ..
-                } => {
-                    let distance = get_distance(q, self.get_vector(left_vector), self.space);
-                    let tuple = (self.swid_store.slice()[left_vector], distance);
-                    let (continue_flag, break_flag) = filter(tuple);
-                    if break_flag {
-                        break;
-                    }
-                    if !continue_flag {
-                        result.push(tuple);
-                    }
-                    let distance = get_distance(q, self.get_vector(right_vector), self.space);
-                    let tuple = (self.swid_store.slice()[right_vector], distance);
-                    let (continue_flag, break_flag) = filter(tuple);
-                    if break_flag {
-                        break;
-                    }
-                    if !continue_flag {
-                        result.push(tuple);
-                    }
-                }
-                Node::Branch2 {
-                    left_next,
-                    right_next,
-                    ..
-                } => {
-                    let distance = get_distance(q, self.nodes[left_next].middle(), self.space);
-                    stack.push((left_next, distance));
-                    let distance = get_distance(q, self.nodes[right_next].middle(), self.space);
-                    stack.push((right_next, distance));
-                }
-                Node::Branch3 {
-                    left_next,
-                    middle_next,
-                    right_next,
-                    ..
-                } => {
-                    let distance = get_distance(q, self.nodes[left_next].middle(), self.space);
-                    stack.push((left_next, distance));
-                    let distance = get_distance(q, self.nodes[right_next].middle(), self.space);
-                    stack.push((right_next, distance));
-                    let distance = get_distance(q, self.nodes[middle_next].middle(), self.space);
-                    stack.push((middle_next, distance));
-                }
-            }
-            stack.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            (current_id, _) = match stack.pop() {
-                Some(x) => x,
-                None => break,
-            };
-        }
-        result
-    }
-    fn get_vector_id_by_swid(&self, swid: Swid) -> Option<NodeID> {
-        match self.nodeid_from_swid.get(&swid) {
-            Some(&id) => match self.nodes[id] {
-                Node::Leaf1 { left_vector, .. } => Some(left_vector),
-                Node::Leaf2 {
-                    left_vector,
-                    right_vector,
-                    ..
-                } => {
-                    let left_swid = self.swid_store.slice()[left_vector];
-                    let right_swid = self.swid_store.slice()[right_vector];
-                    if left_swid == swid {
-                        Some(left_vector)
-                    } else if right_swid == swid {
-                        Some(right_vector)
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            },
-            None => None,
-        }
-    }
-    pub fn remove(&mut self, swid_to_remove: Swid) -> Result<(), ()> {
-        let swid_id = match self.get_vector_id_by_swid(swid_to_remove) {
-            Some(id) => id,
-            None => return Err(()),
-        };
-        let node_id_to_remove = *self.nodeid_from_swid.get(&swid_to_remove).unwrap();
-        // remove reference to swid_to_remove in the nodes
-        match self.nodes[node_id_to_remove] {
-            Node::Leaf2 {
-                left_vector,
-                right_vector,
-                parent,
-                ..
-            } => {
-                let left_swid = self.swid_store.slice()[left_vector];
-                let right_swid = self.swid_store.slice()[right_vector];
-                if left_swid == swid_to_remove {
-                    self.nodes[node_id_to_remove] = Node::Leaf1 {
-                        left_vector: right_vector,
-                        parent,
-                        middle: self.get_vector(right_vector).to_vec(),
-                    };
-                } else if right_swid == swid_to_remove {
-                    self.nodes[node_id_to_remove] = Node::Leaf1 {
-                        left_vector,
-                        parent,
-                        middle: self.get_vector(left_vector).to_vec(),
-                    };
-                }
-                if parent.is_some() {
-                    self.recalculate_middle(parent.unwrap());
-                }
-            }
-            Node::Leaf1 {
-                parent, ref middle, ..
-            } => {
-                self.nodes[node_id_to_remove] = Node::Leaf0 {
-                    parent,
-                    middle: middle.to_vec(),
-                };
-                if parent.is_some() {
-                    self.recalculate_middle(parent.unwrap());
-                }
-            }
-            _ => {}
-        }
-        let last_swid_id = self.swid_store.slice().len() - 1;
-        let last_swid = self.swid_store.slice()[last_swid_id];
-        //swap the last swid with the swid to remove
-        self.swid_store.slice_mut().swap(swid_id, last_swid_id);
-        //swap the last vector with the vector to remove
-        let mut last_vector =
-            self.vector_store.slice()[last_swid_id * self.dimensions..].to_owned();
-        self.vector_store.slice_mut()[swid_id * self.dimensions..(swid_id + 1) * self.dimensions]
-            .swap_with_slice(last_vector.as_mut_slice());
-        self.resize(-1);
-        // swap references to the last swid with the swid to remove
-        let last_node_id = *self.nodeid_from_swid.get(&last_swid).unwrap();
-        self.nodeid_from_swid.insert(swid_to_remove, last_node_id);
-        self.nodeid_from_swid.remove(&last_swid);
-        // replace last_swid_id with swid_id in the nodes
-        match self.nodes[last_node_id] {
-            Node::Leaf1 {
-                ref mut left_vector,
-                ..
-            } => {
-                if *left_vector == last_swid_id {
-                    *left_vector = swid_id;
-                }
-            }
-            Node::Leaf2 {
-                ref mut left_vector,
-                ref mut right_vector,
-                ..
-            } => {
-                if *left_vector == last_swid_id {
-                    *left_vector = swid_id;
-                } else if *right_vector == last_swid_id {
-                    *right_vector = swid_id;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-}
-*/
 #[cfg(test)]
 mod tests {
     use super::*;
