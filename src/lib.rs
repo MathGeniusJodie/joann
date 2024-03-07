@@ -143,8 +143,6 @@ impl<T: Default + Clone> Store<T> {
     }
 }
 
-use bit_vec::BitVec;
-
 const MAX_LAYER: usize = 16;
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -257,7 +255,8 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
             m,
         };
         for i in 0..index.swid_layer.slice().len() {
-            let q = index.vector_layer.slice()[i * index.dimensions..(i + 1) * index.dimensions].to_owned();
+            let q = index.vector_layer.slice()[i * index.dimensions..(i + 1) * index.dimensions]
+                .to_owned();
             index.index(&q, i);
         }
         index
@@ -268,14 +267,12 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
         self.swid_layer.resize(1);
         self.swid_layer.slice_mut()[id] = swid;
         self.vector_layer.resize(self.dimensions as isize);
-        self.vector_layer
-            .slice_mut()
-            [(id * self.dimensions)..((id + 1) * self.dimensions)]
+        self.vector_layer.slice_mut()[(id * self.dimensions)..((id + 1) * self.dimensions)]
             .copy_from_slice(q);
     }
     fn index(&mut self, q: &[F], id: NodeID) {
         let l =
-        ((-rand::random::<f64>().ln() * (1.0f64 / 16.0f64.ln())) as usize).min(MAX_LAYER - 1);
+            ((-rand::random::<f64>().ln() * (1.0f64 / 16.0f64.ln())) as usize).min(MAX_LAYER - 1);
         let mut ep = 0;
         for lc in (l + 1..MAX_LAYER).rev() {
             ep = match self.search_layer(q, ep, 1, lc).first() {
@@ -314,22 +311,27 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
     pub fn remove(&mut self, swid_to_remove: Swid) {
         let last = self.swid_layer.slice().len() - 1;
         let mut last_vector = self.vector_layer.slice()[last * self.dimensions..].to_owned();
-        let id_to_remove = self.swid_layer.slice().iter().position(|&x| x == swid_to_remove).unwrap();
+        let id_to_remove = self
+            .swid_layer
+            .slice()
+            .iter()
+            .position(|&x| x == swid_to_remove)
+            .unwrap();
         self.swid_layer.slice_mut().swap(id_to_remove, last);
-        self.vector_layer
-            .slice_mut()
+        self.vector_layer.slice_mut()
             [id_to_remove * self.dimensions..(id_to_remove + 1) * self.dimensions]
             .swap_with_slice(&mut last_vector);
         self.vector_layer.resize(self.dimensions as isize * -1);
         self.swid_layer.resize(-1);
         self.layers.iter_mut().for_each(|layer| layer.clear());
         for i in 0..last {
-            let q = self.vector_layer.slice()[i * self.dimensions..(i + 1) * self.dimensions].to_owned();
+            let q = self.vector_layer.slice()[i * self.dimensions..(i + 1) * self.dimensions]
+                .to_owned();
             self.index(&q, i);
         }
     }
     fn search_layer(&self, q: &[F], ep: usize, ef: usize, layer: usize) -> Vec<Neighbor<F>> {
-        if ef > self.layers[layer].len() {
+        if ef >= self.layers[layer].len() {
             let len = self.layers[layer].len();
             let mut result = Vec::with_capacity(len);
             for i in 0..len {
@@ -342,7 +344,7 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
             return result;
         }
         let ep_dist = get_distance(self.get_vector(layer, ep), q, self.space);
-        let mut visited = BitVec::from_elem(self.layers[layer].len(), false);
+        let mut visited = smallbitvec::SmallBitVec::from_elem(self.layers[layer].len(), false);
         let mut candidates = Vec::with_capacity(self.m);
         let mut result = Vec::with_capacity(ef);
         visited.set(ep, true);
@@ -377,8 +379,8 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
                         distance: d_e,
                     });
                     if result.len() > ef {
-                        result.sort();
-                        max_dist = pop_max(&mut result).distance;
+                        pop_max(&mut result);
+                        max_dist = result.iter().max().unwrap().distance;
                     }
                 }
             }
@@ -431,7 +433,7 @@ mod tests {
 
     #[test]
     fn test_tree() {
-        let mut tree = Index::<f32>::new(200 ,Distance::Euclidean, 2,16);
+        let mut tree = Index::<f32>::new(200, Distance::Euclidean, 2, 16);
         tree.insert(&[3.0, 3.0], 4);
         tree.insert(&[4.0, 4.0], 352);
         tree.insert(&[5.0, 5.0], 43);
@@ -446,9 +448,9 @@ mod tests {
         assert_eq!(
             tree.knn(&[0.0, 0.0], 3),
             vec![
-                (32 , 0.0),
-                (222 , std::f32::consts::SQRT_2),
-                (567 , 2.0 * std::f32::consts::SQRT_2)
+                (32, 0.0),
+                (222, std::f32::consts::SQRT_2),
+                (567, 2.0 * std::f32::consts::SQRT_2)
             ]
         );
         tree.remove(32);
@@ -467,13 +469,13 @@ mod tests {
     const LINEAR_SEARCH_SIZE: usize = 5000;
     const LINEAR_SEARCH_TOPK: usize = 50;
     #[test]
-    fn test_LINEAR_SEARCH_SIZE() {
+    fn test_speed() {
         use microbench::*;
-        let mut tree = Index::<f32>::new(200 ,Distance::Euclidean, BENCH_DIMENSIONS, 32);
-        
+        let mut tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 32);
+
         let mut rng = rand::thread_rng();
         let mut vectors = Vec::with_capacity(LINEAR_SEARCH_SIZE);
-        vectors.resize_with(LINEAR_SEARCH_SIZE, ||{
+        vectors.resize_with(LINEAR_SEARCH_SIZE, || {
             let mut vector: Vec<f32> = Vec::with_capacity(BENCH_DIMENSIONS);
             vector.resize_with(BENCH_DIMENSIONS, || rng.gen::<f32>());
             vector
@@ -481,7 +483,6 @@ mod tests {
 
         vectors.iter().enumerate().for_each(|(i, vector)| {
             tree.insert(&vector, i as Swid);
-
         });
 
         let bench_options = Options::default();
@@ -489,7 +490,7 @@ mod tests {
             vectors.iter().enumerate().for_each(|(i, vector)| {
                 tree.insert(&vector, i as Swid);
             });
-            tree = Index::<f32>::new(200 ,Distance::Euclidean, BENCH_DIMENSIONS, 32);
+            tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 32);
         });
         vectors.iter().enumerate().for_each(|(i, vector)| {
             tree.insert(&vector, i as Swid);
@@ -523,14 +524,14 @@ mod tests {
     fn test_vs_linear_search() {
         let mut rng = rand::thread_rng();
         let mut vectors = Vec::with_capacity(LINEAR_SEARCH_SIZE);
-        vectors.resize_with(LINEAR_SEARCH_SIZE, ||{
+        vectors.resize_with(LINEAR_SEARCH_SIZE, || {
             let mut vector: Vec<f32> = Vec::with_capacity(BENCH_DIMENSIONS);
             vector.resize_with(BENCH_DIMENSIONS, || rng.gen::<f32>());
             vector
         });
 
         //build a tree
-        let mut tree = Index::<f32>::new(200 ,Distance::Euclidean, BENCH_DIMENSIONS, 32);
+        let mut tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 32);
         for (i, vector) in vectors.iter().enumerate() {
             tree.insert(vector, i as u128);
         }
@@ -554,7 +555,7 @@ mod tests {
         //compare and see if the topk is the same, if they aren't, print the index they differ
         for (a, b) in topk.iter().zip(linear_search_topk.iter()) {
             if !topk.contains(b) {
-               differences.push(abs(a.1 - b.1));
+                differences.push(abs(a.1 - b.1));
             }
         }
 
