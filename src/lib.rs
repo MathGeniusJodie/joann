@@ -1,6 +1,7 @@
 use memmap2::MmapMut;
 use num_traits::Float;
 use std::{
+    collections::HashMap,
     fmt::Debug,
     fs::{File, OpenOptions},
     iter::Sum,
@@ -179,9 +180,10 @@ pub struct Index<F: Float + Debug + Default + Sum> {
     pub dimensions: usize,
     pub swid_layer: Store<Swid>,
     pub vector_layer: Store<F>,
-    ef_construction: usize,
-    space: Distance,
-    m: usize,
+    pub ef_construction: usize,
+    pub space: Distance,
+    pub m: usize,
+    pub swid_to_id: HashMap<Swid, NodeID>,
 }
 
 #[derive(Debug)]
@@ -220,6 +222,7 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
             ef_construction,
             space,
             m,
+            swid_to_id: HashMap::new(),
         }
     }
     pub fn new_with_store(
@@ -253,6 +256,7 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
             ef_construction,
             space,
             m,
+            swid_to_id: HashMap::new(),
         };
         for i in 0..index.swid_layer.slice().len() {
             let q = index.vector_layer.slice()[i * index.dimensions..(i + 1) * index.dimensions]
@@ -261,16 +265,21 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
         }
         index
     }
-    pub fn insert(&mut self, q: &[F], swid: Swid) {
+    pub fn insert(&mut self, q: &[F], swid: Swid) -> Result<(), ()> {
+        if self.swid_to_id.contains_key(&swid) {
+            return Err(());
+        }
         let id = self.swid_layer.slice().len();
-        self.index(q, id);
         self.swid_layer.resize(1);
         self.swid_layer.slice_mut()[id] = swid;
         self.vector_layer.resize(self.dimensions as isize);
         self.vector_layer.slice_mut()[(id * self.dimensions)..((id + 1) * self.dimensions)]
             .copy_from_slice(q);
+        self.index(q, id);
+        Ok(())
     }
     fn index(&mut self, q: &[F], id: NodeID) {
+        self.swid_to_id.insert(self.swid_layer.slice()[id], id);
         let l = ((-rand::random::<f64>().ln() * (1.0f64 / (self.m as f64).ln())) as usize)
             .min(MAX_LAYER - 1);
         let mut ep = 0;
@@ -315,12 +324,7 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
     pub fn remove(&mut self, swid_to_remove: Swid) {
         let last = self.swid_layer.slice().len() - 1;
         let mut last_vector = self.vector_layer.slice()[last * self.dimensions..].to_owned();
-        let id_to_remove = self
-            .swid_layer
-            .slice()
-            .iter()
-            .position(|&x| x == swid_to_remove)
-            .unwrap();
+        let id_to_remove = *self.swid_to_id.get(&swid_to_remove).unwrap();
         self.swid_layer.slice_mut().swap(id_to_remove, last);
         self.vector_layer.slice_mut()
             [id_to_remove * self.dimensions..(id_to_remove + 1) * self.dimensions]
@@ -333,6 +337,7 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
                 .to_owned();
             self.index(&q, i);
         }
+        self.swid_to_id.remove(&swid_to_remove);
     }
     fn search_layer(&self, q: &[F], ep: usize, ef: usize, layer: usize) -> Vec<Neighbor<F>> {
         if ef >= self.layers[layer].len() {
@@ -438,16 +443,16 @@ mod tests {
     #[test]
     fn test_tree() {
         let mut tree = Index::<f32>::new(32, Distance::Euclidean, 2, 16);
-        tree.insert(&[3.0, 3.0], 4);
-        tree.insert(&[4.0, 4.0], 352);
-        tree.insert(&[5.0, 5.0], 43);
-        tree.insert(&[6.0, 6.0], 41);
-        tree.insert(&[7.0, 7.0], 35);
-        tree.insert(&[8.0, 8.0], 52);
-        tree.insert(&[9.0, 9.0], 42);
-        tree.insert(&[0.0, 0.0], 32);
-        tree.insert(&[1.0, 1.0], 222);
-        tree.insert(&[2.0, 2.0], 567);
+        tree.insert(&[3.0, 3.0], 4).unwrap();
+        tree.insert(&[4.0, 4.0], 352).unwrap();
+        tree.insert(&[5.0, 5.0], 43).unwrap();
+        tree.insert(&[6.0, 6.0], 41).unwrap();
+        tree.insert(&[7.0, 7.0], 35).unwrap();
+        tree.insert(&[8.0, 8.0], 52).unwrap();
+        tree.insert(&[9.0, 9.0], 42).unwrap();
+        tree.insert(&[0.0, 0.0], 32).unwrap();
+        tree.insert(&[1.0, 1.0], 222).unwrap();
+        tree.insert(&[2.0, 2.0], 567).unwrap();
         //dbg!(&tree);
         assert_eq!(
             tree.knn(&[0.0, 0.0], 3),
@@ -470,12 +475,12 @@ mod tests {
         );
     }
     const BENCH_DIMENSIONS: usize = 300;
-    const LINEAR_SEARCH_SIZE: usize = 5000;
+    const LINEAR_SEARCH_SIZE: usize = 10000;
     const LINEAR_SEARCH_TOPK: usize = 50;
     #[test]
     fn test_speed() {
         use microbench::*;
-        let mut tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 16);
+        let mut tree = Index::<f32>::new(100, Distance::Euclidean, BENCH_DIMENSIONS, 16);
 
         let mut rng = rand::thread_rng();
         let mut vectors = Vec::with_capacity(LINEAR_SEARCH_SIZE);
@@ -485,19 +490,15 @@ mod tests {
             vector
         });
 
-        vectors.iter().enumerate().for_each(|(i, vector)| {
-            tree.insert(&vector, i as Swid);
-        });
-
         let bench_options = Options::default();
         microbench::bench(&bench_options, "insert", || {
             vectors.iter().enumerate().for_each(|(i, vector)| {
-                tree.insert(&vector, i as Swid);
+                tree.insert(&vector, i as Swid).unwrap();
             });
-            tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 16);
+            tree = Index::<f32>::new(100, Distance::Euclidean, BENCH_DIMENSIONS, 16);
         });
         vectors.iter().enumerate().for_each(|(i, vector)| {
-            tree.insert(&vector, i as Swid);
+            tree.insert(&vector, i as Swid).unwrap();
         });
         microbench::bench(&bench_options, "knn_topk1", || {
             for i in 0..LINEAR_SEARCH_SIZE {
@@ -535,9 +536,9 @@ mod tests {
         });
 
         //build a tree
-        let mut tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 16);
+        let mut tree = Index::<f32>::new(100, Distance::Euclidean, BENCH_DIMENSIONS, 16);
         for (i, vector) in vectors.iter().enumerate() {
-            tree.insert(vector, i as u128);
+            tree.insert(vector, i as u128).unwrap();
         }
 
         //get random vector for sampling
