@@ -271,8 +271,8 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
             .copy_from_slice(q);
     }
     fn index(&mut self, q: &[F], id: NodeID) {
-        let l =
-            ((-rand::random::<f64>().ln() * (1.0f64 / 16.0f64.ln())) as usize).min(MAX_LAYER - 1);
+        let l = ((-rand::random::<f64>().ln() * (1.0f64 / (self.m as f64).ln())) as usize)
+            .min(MAX_LAYER - 1);
         let mut ep = 0;
         for lc in (l + 1..MAX_LAYER).rev() {
             ep = match self.search_layer(q, ep, 1, lc).first() {
@@ -283,7 +283,7 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
 
         for lc in (0..=l).rev() {
             let mut n = self.search_layer(q, ep, self.ef_construction, lc);
-            n.truncate(self.m);
+            n.truncate(if lc == 0 { self.m * 2 } else { self.m });
             let qid = self.layers[lc].len();
             for neighbor in &n {
                 self.layers[lc][neighbor.id].neighbors.push(Neighbor {
@@ -291,7 +291,11 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
                     distance: neighbor.distance,
                 });
                 self.layers[lc][neighbor.id].neighbors.sort();
-                self.layers[lc][neighbor.id].neighbors.truncate(self.m);
+                self.layers[lc][neighbor.id].neighbors.truncate(if lc == 0 {
+                    self.m * 2
+                } else {
+                    self.m
+                });
             }
             let lower_id = if lc == 0 {
                 id
@@ -345,7 +349,7 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
         }
         let ep_dist = get_distance(self.get_vector(layer, ep), q, self.space);
         let mut visited = smallbitvec::SmallBitVec::from_elem(self.layers[layer].len(), false);
-        let mut candidates = Vec::with_capacity(self.m);
+        let mut candidates = Vec::new();
         let mut result = Vec::with_capacity(ef);
         visited.set(ep, true);
         candidates.push(Neighbor {
@@ -433,7 +437,7 @@ mod tests {
 
     #[test]
     fn test_tree() {
-        let mut tree = Index::<f32>::new(200, Distance::Euclidean, 2, 16);
+        let mut tree = Index::<f32>::new(32, Distance::Euclidean, 2, 16);
         tree.insert(&[3.0, 3.0], 4);
         tree.insert(&[4.0, 4.0], 352);
         tree.insert(&[5.0, 5.0], 43);
@@ -471,7 +475,7 @@ mod tests {
     #[test]
     fn test_speed() {
         use microbench::*;
-        let mut tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 32);
+        let mut tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 16);
 
         let mut rng = rand::thread_rng();
         let mut vectors = Vec::with_capacity(LINEAR_SEARCH_SIZE);
@@ -490,7 +494,7 @@ mod tests {
             vectors.iter().enumerate().for_each(|(i, vector)| {
                 tree.insert(&vector, i as Swid);
             });
-            tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 32);
+            tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 16);
         });
         vectors.iter().enumerate().for_each(|(i, vector)| {
             tree.insert(&vector, i as Swid);
@@ -531,7 +535,7 @@ mod tests {
         });
 
         //build a tree
-        let mut tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 32);
+        let mut tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 16);
         for (i, vector) in vectors.iter().enumerate() {
             tree.insert(vector, i as u128);
         }
