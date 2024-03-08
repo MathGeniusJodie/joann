@@ -17,7 +17,13 @@ pub enum Distance {
     L2,
     IP,
 }
-fn get_distance<F: Float + Debug + Default + Sum + Sum>(a: &[F], b: &[F], space: Distance) -> F {
+fn get_distance<F: Float + Debug + Default + Sum>(
+    a: &[F],
+    b: &[F],
+    aa: F,
+    bb: F,
+    space: Distance,
+) -> F {
     #[cfg(target_feature = "avx")]
     const STRIDE: usize = 8;
     #[cfg(not(target_feature = "avx"))]
@@ -26,78 +32,47 @@ fn get_distance<F: Float + Debug + Default + Sum + Sum>(a: &[F], b: &[F], space:
     let chunks_b = b.chunks_exact(STRIDE);
     let rem_a = chunks_a.remainder();
     let rem_b = chunks_b.remainder();
-    match space {
-        Distance::Euclidean => {
-            let mut sum = [F::zero(); STRIDE];
-            for (a, b) in chunks_a.zip(chunks_b) {
-                for i in 0..STRIDE {
-                    let diff = a[i] - b[i];
-                    sum[i] = diff.mul_add(diff, sum[i]);
-                }
-            }
-            let mut sum = sum.into_iter().sum();
-            for i in 0..rem_a.len() {
-                let diff = rem_a[i] - rem_b[i];
-                sum = diff.mul_add(diff, sum);
-            }
-            sum.sqrt()
-        }
-        Distance::Cosine => {
-            let mut dot = [F::zero(); STRIDE];
-            let mut xx = [F::zero(); STRIDE];
-            let mut yy = [F::zero(); STRIDE];
-            for (a, b) in chunks_a.zip(chunks_b) {
-                for i in 0..STRIDE {
-                    dot[i] = a[i].mul_add(b[i], dot[i]);
-                    xx[i] = a[i].mul_add(a[i], xx[i]);
-                    yy[i] = b[i].mul_add(b[i], yy[i]);
-                }
-            }
-            let mut dot = dot.iter().fold(F::zero(), |acc, &x| acc + x);
-            let mut xx = xx.iter().fold(F::zero(), |acc, &x| acc + x);
-            let mut yy = yy.iter().fold(F::zero(), |acc, &x| acc + x);
-            for i in 0..rem_a.len() {
-                dot = rem_a[i].mul_add(rem_b[i], dot);
-                xx = rem_a[i].mul_add(rem_a[i], xx);
-                yy = rem_b[i].mul_add(rem_b[i], yy);
-            }
-
-            //handle 0 vectors
-            if xx * yy <= F::zero() {
-                return F::zero();
-            }
-
-            F::one() - dot / (xx * yy).sqrt()
-        }
-        Distance::L2 => {
-            let mut sum = [F::zero(); STRIDE];
-            for (a, b) in chunks_a.zip(chunks_b) {
-                for i in 0..STRIDE {
-                    let diff = a[i] - b[i];
-                    sum[i] = diff.mul_add(diff, sum[i]);
-                }
-            }
-            let mut sum = sum.iter().fold(F::zero(), |acc, &x| acc + x);
-            for i in 0..rem_a.len() {
-                let diff = rem_a[i] - rem_b[i];
-                sum = diff.mul_add(diff, sum);
-            }
-            sum
-        }
-        Distance::IP => {
-            let mut dot = [F::zero(); STRIDE];
-            for (a, b) in chunks_a.zip(chunks_b) {
-                for i in 0..STRIDE {
-                    dot[i] = a[i].mul_add(b[i], dot[i]);
-                }
-            }
-            let mut dot = dot.iter().fold(F::zero(), |acc, &x| acc + x);
-            for i in 0..rem_a.len() {
-                dot = rem_a[i].mul_add(rem_b[i], dot);
-            }
-            dot
+    let mut dot = [F::zero(); STRIDE];
+    for (a, b) in chunks_a.zip(chunks_b) {
+        for i in 0..STRIDE {
+            dot[i] = a[i].mul_add(b[i], dot[i]);
         }
     }
+    let mut dot = dot.into_iter().sum();
+    for i in 0..rem_a.len() {
+        dot = rem_a[i].mul_add(rem_b[i], dot);
+    }
+    match space {
+        Distance::Cosine => {
+            //handle 0 vectors
+            if aa * bb <= F::zero() {
+                return F::zero();
+            }
+            F::one() - dot / (aa * bb).sqrt()
+        }
+        Distance::Euclidean => (aa + bb - F::from(2).unwrap() * dot).sqrt(),
+        Distance::L2 => aa + bb - F::from(2).unwrap() * dot,
+        Distance::IP => dot,
+    }
+}
+fn get_length_2<F: Float + Debug + Default + Sum>(a: &[F]) -> F {
+    #[cfg(target_feature = "avx")]
+    const STRIDE: usize = 8;
+    #[cfg(not(target_feature = "avx"))]
+    const STRIDE: usize = 4;
+    let chunks_a = a.chunks_exact(STRIDE);
+    let rem_a = chunks_a.remainder();
+    let mut aa = [F::zero(); STRIDE];
+    for a in chunks_a {
+        for i in 0..STRIDE {
+            aa[i] = a[i].mul_add(a[i], aa[i]);
+        }
+    }
+    let mut aa = aa.iter().fold(F::zero(), |acc, &x| acc + x);
+    for i in 0..rem_a.len() {
+        aa = rem_a[i].mul_add(rem_a[i], aa);
+    }
+    aa
 }
 
 #[derive(Debug)]
@@ -180,6 +155,7 @@ pub struct Index<F: Float + Debug + Default + Sum> {
     pub dimensions: usize,
     pub swid_layer: Store<Swid>,
     pub vector_layer: Store<F>,
+    pub length_2_layer: Store<F>,
     pub ef_construction: usize,
     pub space: Distance,
     pub m: usize,
@@ -219,6 +195,7 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
             dimensions,
             swid_layer: Store::Vec(Vec::new()),
             vector_layer: Store::Vec(Vec::new()),
+            length_2_layer: Store::Vec(Vec::new()),
             ef_construction,
             space,
             m,
@@ -253,6 +230,7 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
             dimensions,
             swid_layer: Store::Mmap((swid_file, swid_mmap)),
             vector_layer: Store::Mmap((vector_file, vector_mmap)),
+            length_2_layer: Store::Vec(Vec::new()),
             ef_construction,
             space,
             m,
@@ -280,6 +258,8 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
     }
     fn index(&mut self, q: &[F], id: NodeID) {
         self.swid_to_id.insert(self.swid_layer.slice()[id], id);
+        self.length_2_layer.resize(1);
+        self.length_2_layer.slice_mut()[id] = get_length_2(q);
         let l = ((-rand::random::<f64>().ln() * (1.0f64 / (self.m as f64).ln())) as usize)
             .min(MAX_LAYER - 1);
         let mut ep = 0;
@@ -326,11 +306,13 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
         let mut last_vector = self.vector_layer.slice()[last * self.dimensions..].to_owned();
         let id_to_remove = *self.swid_to_id.get(&swid_to_remove).unwrap();
         self.swid_layer.slice_mut().swap(id_to_remove, last);
+        self.length_2_layer.slice_mut().swap(id_to_remove, last);
         self.vector_layer.slice_mut()
             [id_to_remove * self.dimensions..(id_to_remove + 1) * self.dimensions]
             .swap_with_slice(&mut last_vector);
         self.vector_layer.resize(self.dimensions as isize * -1);
         self.swid_layer.resize(-1);
+        self.length_2_layer.resize(-1);
         self.layers.iter_mut().for_each(|layer| layer.clear());
         for i in 0..last {
             let q = self.vector_layer.slice()[i * self.dimensions..(i + 1) * self.dimensions]
@@ -340,19 +322,32 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
         self.swid_to_id.remove(&swid_to_remove);
     }
     fn search_layer(&self, q: &[F], ep: usize, ef: usize, layer: usize) -> Vec<Neighbor<F>> {
+        let qq = get_length_2(q);
         if ef >= self.layers[layer].len() {
             let len = self.layers[layer].len();
             let mut result = Vec::with_capacity(len);
             for i in 0..len {
                 result.push(Neighbor {
                     id: i,
-                    distance: get_distance(self.get_vector(layer, i), q, self.space),
+                    distance: get_distance(
+                        self.get_vector(layer, i),
+                        q,
+                        self.get_length_2(layer, i),
+                        qq,
+                        self.space,
+                    ),
                 });
             }
             result.sort();
             return result;
         }
-        let ep_dist = get_distance(self.get_vector(layer, ep), q, self.space);
+        let ep_dist = get_distance(
+            self.get_vector(layer, ep),
+            q,
+            self.get_length_2(layer, ep),
+            qq,
+            self.space,
+        );
         let mut visited = smallbitvec::SmallBitVec::from_elem(self.layers[layer].len(), false);
         let mut candidates = Vec::new();
         let mut result = Vec::with_capacity(ef);
@@ -376,7 +371,14 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
                     continue;
                 }
                 visited.set(e.id, true);
-                let d_e = get_distance(self.get_vector(layer, e.id), q, self.space);
+
+                let d_e = get_distance(
+                    self.get_vector(layer, e.id),
+                    q,
+                    self.get_length_2(layer, e.id),
+                    qq,
+                    self.space,
+                );
                 if d_e < max_dist || result.len() < ef {
                     result.push(Neighbor {
                         id: e.id,
@@ -415,6 +417,14 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
                 .unwrap()
         } else {
             self.get_vector(layer - 1, lower)
+        }
+    }
+    fn get_length_2(&self, layer: usize, id: NodeID) -> F {
+        let lower = self.layers[layer][id].lower_id;
+        if layer == 0 {
+            self.length_2_layer.slice()[lower]
+        } else {
+            self.get_length_2(layer - 1, lower)
         }
     }
     pub fn knn(&self, q: &[F], k: usize) -> Vec<(Swid, F)> {
@@ -550,7 +560,13 @@ mod tests {
         //linear search topk LINEAR_SEARCH_TOPK
         let mut linear_search_topk = Vec::new();
         for (i, vector) in vectors.iter().enumerate() {
-            let distance = get_distance(random_vector, vector, Distance::Euclidean);
+            let distance = get_distance(
+                random_vector,
+                vector,
+                get_length_2(&random_vector),
+                get_length_2(&vector),
+                Distance::Euclidean,
+            );
             linear_search_topk.push((i as u128, distance));
         }
         linear_search_topk.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
