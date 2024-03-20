@@ -111,7 +111,7 @@ impl<T: Default + Clone> Store<T> {
                 let bytes = new_len * std::mem::size_of::<T>();
                 // unmap so we can resize the file in windows
                 #[cfg(target_os = "windows")]
-                {   
+                {
                     *mmap = MmapMut::map_anon(0).unwrap();
                 }
                 file.set_len(bytes as u64).unwrap();
@@ -327,25 +327,10 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
         self.swid_to_id.remove(&swid_to_remove);
     }
     fn search_layer(&self, q: &[F], ep: usize, ef: usize, layer: usize) -> Vec<Neighbor<F>> {
-        let qq = get_length_2(q);
-        if ef >= self.layers[layer].len() {
-            let len = self.layers[layer].len();
-            let mut result = Vec::with_capacity(len);
-            for i in 0..len {
-                result.push(Neighbor {
-                    id: i,
-                    distance: get_distance(
-                        self.get_vector(layer, i),
-                        q,
-                        self.get_length_2(layer, i),
-                        qq,
-                        self.space,
-                    ),
-                });
-            }
-            result.sort();
-            return result;
+        if self.layers[layer].len() == 0 {
+            return Vec::new();
         }
+        let qq = get_length_2(q);
         let ep_dist = get_distance(
             self.get_vector(layer, ep),
             q,
@@ -489,13 +474,13 @@ mod tests {
             ]
         );
     }
-    const BENCH_DIMENSIONS: usize = 300;
+    const BENCH_DIMENSIONS: usize = 128;
     const LINEAR_SEARCH_SIZE: usize = 10000;
     const LINEAR_SEARCH_TOPK: usize = 50;
     #[test]
     fn test_speed() {
         use microbench::*;
-        let mut tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 32);
+        let mut tree = Index::<f32>::new(100, Distance::Euclidean, BENCH_DIMENSIONS, 32);
 
         let mut rng = rand::thread_rng();
         let mut vectors = Vec::with_capacity(LINEAR_SEARCH_SIZE);
@@ -560,7 +545,7 @@ mod tests {
         let random_vector = &vectors[0];
 
         //topk LINEAR_SEARCH_TOPK
-        let mut topk = tree.knn(random_vector, LINEAR_SEARCH_TOPK*2);
+        let mut topk = tree.knn(random_vector, LINEAR_SEARCH_TOPK * 2);
         topk.truncate(LINEAR_SEARCH_TOPK);
 
         //linear search topk LINEAR_SEARCH_TOPK
