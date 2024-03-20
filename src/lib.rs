@@ -1,4 +1,4 @@
-use memmap2::MmapMut;
+use memmap2::{Mmap, MmapMut};
 use num_traits::Float;
 use std::{
     collections::HashMap,
@@ -109,6 +109,11 @@ impl<T: Default + Clone> Store<T> {
             Store::Mmap((ref file, ref mut mmap)) => {
                 mmap.flush().unwrap();
                 let bytes = new_len * std::mem::size_of::<T>();
+                // unmap so we can resize the file in windows
+                #[cfg(target_os = "windows")]
+                {   
+                    *mmap = MmapMut::map_anon(0).unwrap();
+                }
                 file.set_len(bytes as u64).unwrap();
                 *mmap = unsafe { MmapMut::map_mut(file).unwrap() };
             }
@@ -490,7 +495,7 @@ mod tests {
     #[test]
     fn test_speed() {
         use microbench::*;
-        let mut tree = Index::<f32>::new(100, Distance::Euclidean, BENCH_DIMENSIONS, 16);
+        let mut tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 32);
 
         let mut rng = rand::thread_rng();
         let mut vectors = Vec::with_capacity(LINEAR_SEARCH_SIZE);
@@ -505,7 +510,7 @@ mod tests {
             vectors.iter().enumerate().for_each(|(i, vector)| {
                 tree.insert(&vector, i as Swid).unwrap();
             });
-            tree = Index::<f32>::new(100, Distance::Euclidean, BENCH_DIMENSIONS, 16);
+            tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 32);
         });
         vectors.iter().enumerate().for_each(|(i, vector)| {
             tree.insert(&vector, i as Swid).unwrap();
@@ -546,7 +551,7 @@ mod tests {
         });
 
         //build a tree
-        let mut tree = Index::<f32>::new(100, Distance::Euclidean, BENCH_DIMENSIONS, 16);
+        let mut tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 32);
         for (i, vector) in vectors.iter().enumerate() {
             tree.insert(vector, i as u128).unwrap();
         }
@@ -555,7 +560,8 @@ mod tests {
         let random_vector = &vectors[0];
 
         //topk LINEAR_SEARCH_TOPK
-        let topk = tree.knn(random_vector, LINEAR_SEARCH_TOPK);
+        let mut topk = tree.knn(random_vector, LINEAR_SEARCH_TOPK*2);
+        topk.truncate(LINEAR_SEARCH_TOPK);
 
         //linear search topk LINEAR_SEARCH_TOPK
         let mut linear_search_topk = Vec::new();
