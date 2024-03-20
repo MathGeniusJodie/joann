@@ -1,4 +1,4 @@
-use memmap2::{Mmap, MmapMut};
+use memmap2::MmapMut;
 use num_traits::Float;
 use std::{
     collections::HashMap,
@@ -362,13 +362,17 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
                 }
                 visited.set(e.id, true);
 
-                let d_e = get_distance(
-                    self.get_vector(layer, e.id),
-                    q,
-                    self.get_length_2(layer, e.id),
-                    qq,
-                    self.space,
-                );
+                let d_e = if c.distance > F::epsilon() {
+                    get_distance(
+                        self.get_vector(layer, e.id),
+                        q,
+                        self.get_length_2(layer, e.id),
+                        qq,
+                        self.space,
+                    )
+                } else {
+                    e.distance
+                };
                 if d_e < max_dist || result.len() < ef {
                     result.push(Neighbor {
                         id: e.id,
@@ -383,6 +387,9 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
                         pop_max(&mut result);
                         max_dist = result.iter().max().unwrap().distance;
                     }
+                }
+                if d_e < c.distance {
+                    break;
                 }
             }
         }
