@@ -388,9 +388,6 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
                         max_dist = result.iter().max().unwrap().distance;
                     }
                 }
-                if d_e < c.distance {
-                    break;
-                }
             }
         }
         result.sort();
@@ -487,7 +484,7 @@ mod tests {
     #[test]
     fn test_speed() {
         use microbench::*;
-        let mut tree = Index::<f32>::new(100, Distance::Euclidean, BENCH_DIMENSIONS, 32);
+        let mut tree = Index::<f32>::new(100, Distance::Euclidean, BENCH_DIMENSIONS, 16);
 
         let mut rng = rand::thread_rng();
         let mut vectors = Vec::with_capacity(LINEAR_SEARCH_SIZE);
@@ -502,7 +499,7 @@ mod tests {
             vectors.iter().enumerate().for_each(|(i, vector)| {
                 tree.insert(&vector, i as Swid).unwrap();
             });
-            tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 32);
+            tree = Index::<f32>::new(100, Distance::Euclidean, BENCH_DIMENSIONS, 16);
         });
         vectors.iter().enumerate().for_each(|(i, vector)| {
             tree.insert(&vector, i as Swid).unwrap();
@@ -543,7 +540,7 @@ mod tests {
         });
 
         //build a tree
-        let mut tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 32);
+        let mut tree = Index::<f32>::new(100, Distance::Euclidean, BENCH_DIMENSIONS, 16);
         for (i, vector) in vectors.iter().enumerate() {
             tree.insert(vector, i as u128).unwrap();
         }
