@@ -262,21 +262,22 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
         Ok(())
     }
     fn index(&mut self, q: &[F], id: NodeID) {
+        let qq = get_length_2(q);
         self.swid_to_id.insert(self.swid_layer.slice()[id], id);
         self.length_2_layer.resize(1);
-        self.length_2_layer.slice_mut()[id] = get_length_2(q);
+        self.length_2_layer.slice_mut()[id] = qq;
         let l = ((-rand::random::<f64>().ln() * (1.0f64 / (self.m as f64).ln())) as usize)
             .min(MAX_LAYER - 1);
         let mut ep = 0;
         for lc in (l + 1..MAX_LAYER).rev() {
-            ep = match self.search_layer(q, ep, 1, lc).first() {
+            ep = match self.search_layer(q, qq, ep, 1, lc).first() {
                 Some(n) => self.layers[lc][n.id].lower_id,
                 None => 0,
             };
         }
 
         for lc in (0..=l).rev() {
-            let mut n = self.search_layer(q, ep, self.ef_construction, lc);
+            let mut n = self.search_layer(q, qq, ep, self.ef_construction, lc);
             n.truncate(if lc == 0 { self.m * 2 } else { self.m });
             let qid = self.layers[lc].len();
             for neighbor in &n {
@@ -326,11 +327,10 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
         }
         self.swid_to_id.remove(&swid_to_remove);
     }
-    fn search_layer(&self, q: &[F], ep: usize, ef: usize, layer: usize) -> Vec<Neighbor<F>> {
+    fn search_layer(&self, q: &[F], qq: F, ep: usize, ef: usize, layer: usize) -> Vec<Neighbor<F>> {
         if self.layers[layer].len() == 0 {
             return Vec::new();
         }
-        let qq = get_length_2(q);
         let ep_dist = get_distance(
             self.get_vector(layer, ep),
             q,
@@ -422,15 +422,16 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
         }
     }
     pub fn knn(&self, q: &[F], k: usize) -> Vec<(Swid, F)> {
+        let qq = get_length_2(q);
         let ef_search = k;
         let mut ep = 0;
         for lc in (1..MAX_LAYER).rev() {
-            ep = match self.search_layer(q, ep, 1, lc).first() {
+            ep = match self.search_layer(q, qq, ep, 1, lc).first() {
                 Some(n) => self.layers[lc][n.id].lower_id,
                 None => 0,
             };
         }
-        self.search_layer(q, ep, ef_search, 0)
+        self.search_layer(q, qq, ep, ef_search, 0)
             .iter()
             .take(k)
             .map(|n| (self.get_swid(0, n.id), n.distance))
@@ -484,7 +485,7 @@ mod tests {
     #[test]
     fn test_speed() {
         use microbench::*;
-        let mut tree = Index::<f32>::new(100, Distance::Euclidean, BENCH_DIMENSIONS, 16);
+        let mut tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 32);
 
         let mut rng = rand::thread_rng();
         let mut vectors = Vec::with_capacity(LINEAR_SEARCH_SIZE);
@@ -499,7 +500,7 @@ mod tests {
             vectors.iter().enumerate().for_each(|(i, vector)| {
                 tree.insert(&vector, i as Swid).unwrap();
             });
-            tree = Index::<f32>::new(100, Distance::Euclidean, BENCH_DIMENSIONS, 16);
+            tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 32);
         });
         vectors.iter().enumerate().for_each(|(i, vector)| {
             tree.insert(&vector, i as Swid).unwrap();
@@ -540,7 +541,7 @@ mod tests {
         });
 
         //build a tree
-        let mut tree = Index::<f32>::new(100, Distance::Euclidean, BENCH_DIMENSIONS, 16);
+        let mut tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 32);
         for (i, vector) in vectors.iter().enumerate() {
             tree.insert(vector, i as u128).unwrap();
         }
