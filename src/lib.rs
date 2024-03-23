@@ -173,7 +173,6 @@ pub struct Node<F: Float + Debug + Default + Sum> {
     lower_id: NodeID,
     lowest_id: NodeID,
 }
-
 fn pop_min<T: Ord>(v: &mut Vec<T>) -> T {
     let min_index = v
         .iter()
@@ -358,6 +357,7 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
             if c.distance > max_dist {
                 break;
             }
+            let mut recalc_max_dist = false;
             for e in &self.layers[layer][c.id].neighbors {
                 if visited.get(e.id).unwrap() {
                     continue;
@@ -390,9 +390,12 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
                     }
                     if result.len() > ef {
                         pop_max(&mut result);
-                        max_dist = result.iter().max().unwrap().distance;
+                        recalc_max_dist = true;
                     }
                 }
+            }
+            if recalc_max_dist {
+                max_dist = result.iter().max().unwrap().distance;
             }
         }
         result.sort();
@@ -474,7 +477,7 @@ mod tests {
     #[test]
     fn test_speed() {
         use microbench::*;
-        let mut tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 32);
+        let mut tree = Index::<f32>::new(100, Distance::Euclidean, BENCH_DIMENSIONS, 32);
 
         let mut rng = rand::thread_rng();
         let mut vectors = Vec::with_capacity(LINEAR_SEARCH_SIZE);
@@ -489,7 +492,7 @@ mod tests {
             vectors.iter().enumerate().for_each(|(i, vector)| {
                 tree.insert(&vector, i as Swid).unwrap();
             });
-            tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 32);
+            tree = Index::<f32>::new(100, Distance::Euclidean, BENCH_DIMENSIONS, 32);
         });
         vectors.iter().enumerate().for_each(|(i, vector)| {
             tree.insert(&vector, i as Swid).unwrap();
@@ -530,7 +533,7 @@ mod tests {
         });
 
         //build a tree
-        let mut tree = Index::<f32>::new(200, Distance::Euclidean, BENCH_DIMENSIONS, 32);
+        let mut tree = Index::<f32>::new(100, Distance::Euclidean, BENCH_DIMENSIONS, 32);
         for (i, vector) in vectors.iter().enumerate() {
             tree.insert(vector, i as u128).unwrap();
         }
