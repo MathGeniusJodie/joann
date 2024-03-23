@@ -171,6 +171,7 @@ pub struct Index<F: Float + Debug + Default + Sum> {
 pub struct Node<F: Float + Debug + Default + Sum> {
     neighbors: Vec<Neighbor<F>>,
     lower_id: NodeID,
+    lowest_id: NodeID,
 }
 
 fn pop_min<T: Ord>(v: &mut Vec<T>) -> T {
@@ -304,6 +305,7 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
             self.layers[lc].push(Node {
                 neighbors: n,
                 lower_id,
+                lowest_id: id,
             });
         }
     }
@@ -339,8 +341,8 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
             self.space,
         );
         let mut visited = smallbitvec::SmallBitVec::from_elem(self.layers[layer].len(), false);
-        let mut candidates = Vec::new();
-        let mut result = Vec::with_capacity(ef);
+        let mut candidates = Vec::with_capacity(ef + 1);
+        let mut result = Vec::with_capacity(ef + 1);
         visited.set(ep, true);
         candidates.push(Neighbor {
             id: ep,
@@ -383,6 +385,9 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
                         id: e.id,
                         distance: d_e,
                     });
+                    if candidates.len() > ef {
+                        pop_max(&mut candidates);
+                    }
                     if result.len() > ef {
                         pop_max(&mut result);
                         max_dist = result.iter().max().unwrap().distance;
@@ -394,32 +399,16 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
         result
     }
     fn get_swid(&self, layer: usize, id: NodeID) -> Swid {
-        let lower = self.layers[layer][id].lower_id;
-        if layer == 0 {
-            self.swid_layer.slice()[lower]
-        } else {
-            self.get_swid(layer - 1, lower)
-        }
+        let lowest = self.layers[layer][id].lowest_id;
+        self.swid_layer.slice()[lowest]
     }
     fn get_vector(&self, layer: usize, id: NodeID) -> &[F] {
-        let lower = self.layers[layer][id].lower_id;
-        if layer == 0 {
-            self.vector_layer
-                .slice()
-                .chunks(self.dimensions)
-                .nth(lower)
-                .unwrap()
-        } else {
-            self.get_vector(layer - 1, lower)
-        }
+        let lowest = self.layers[layer][id].lowest_id;
+        &self.vector_layer.slice()[lowest * self.dimensions..(lowest + 1) * self.dimensions]
     }
     fn get_length_2(&self, layer: usize, id: NodeID) -> F {
-        let lower = self.layers[layer][id].lower_id;
-        if layer == 0 {
-            self.length_2_layer.slice()[lower]
-        } else {
-            self.get_length_2(layer - 1, lower)
-        }
+        let lowest = self.layers[layer][id].lowest_id;
+        self.length_2_layer.slice()[lowest]
     }
     pub fn knn(&self, q: &[F], k: usize) -> Vec<(Swid, F)> {
         let qq = get_length_2(q);
