@@ -173,15 +173,6 @@ pub struct Node<F: Float + Debug + Default + Sum> {
     lower_id: NodeID,
     lowest_id: NodeID,
 }
-fn pop_min<T: Ord>(v: &mut Vec<T>) -> T {
-    let min_index = v
-        .iter()
-        .enumerate()
-        .min_by(|(_, a), (_, b)| a.cmp(b))
-        .unwrap()
-        .0;
-    v.swap_remove(min_index)
-}
 fn pop_max<T: Ord>(v: &mut Vec<T>) -> T {
     let max_index = v
         .iter()
@@ -191,7 +182,6 @@ fn pop_max<T: Ord>(v: &mut Vec<T>) -> T {
         .0;
     v.swap_remove(max_index)
 }
-
 impl<F: Float + Debug + Default + Sum> Index<F> {
     pub fn new(ef_construction: usize, space: Distance, dimensions: usize, m: usize) -> Index<F> {
         let layers: [Vec<Node<F>>; MAX_LAYER] = Default::default();
@@ -340,30 +330,25 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
             self.space,
         );
         let mut visited = smallbitvec::SmallBitVec::from_elem(self.layers[layer].len(), false);
-        let mut candidates = Vec::with_capacity(ef + 1);
-        let mut result = Vec::with_capacity(ef + 1);
+        let mut recursed = smallbitvec::SmallBitVec::from_elem(self.layers[layer].len(), false);
+        let mut result = Vec::with_capacity(ef);
         visited.set(ep, true);
-        candidates.push(Neighbor {
-            id: ep,
-            distance: ep_dist,
-        });
         result.push(Neighbor {
             id: ep,
             distance: ep_dist,
         });
         let mut max_dist = ep_dist;
-        while !candidates.is_empty() {
-            let c = pop_min(&mut candidates);
-            if c.distance > max_dist {
-                break;
-            }
-            let mut recalc_max_dist = false;
+        loop {
+            let c = match result.iter().filter(|n| !recursed.get(n.id).unwrap()).min() {
+                Some(c) => *c,
+                None => break,
+            };
+            recursed.set(c.id, true);
             for e in &self.layers[layer][c.id].neighbors {
                 if visited.get(e.id).unwrap() {
                     continue;
                 }
                 visited.set(e.id, true);
-
                 let d_e = if c.distance > F::epsilon() {
                     get_distance(
                         self.get_vector(layer, e.id),
@@ -375,27 +360,20 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
                 } else {
                     e.distance
                 };
-                if d_e < max_dist || result.len() < ef {
+                if result.len() < ef {
                     result.push(Neighbor {
                         id: e.id,
                         distance: d_e,
                     });
                     max_dist = max_dist.max(d_e);
-                    candidates.push(Neighbor {
+                } else if d_e < max_dist {
+                    pop_max(&mut result);
+                    result.push(Neighbor {
                         id: e.id,
                         distance: d_e,
                     });
-                    if candidates.len() > ef {
-                        pop_max(&mut candidates);
-                    }
-                    if result.len() > ef {
-                        pop_max(&mut result);
-                        recalc_max_dist = true;
-                    }
+                    max_dist = result.iter().max().unwrap().distance;
                 }
-            }
-            if recalc_max_dist {
-                max_dist = result.iter().max().unwrap().distance;
             }
         }
         result.sort();
