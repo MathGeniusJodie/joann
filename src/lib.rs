@@ -105,9 +105,13 @@ impl<T: Default + Clone> Store<T> {
     }
     fn resize(&mut self, n: isize) {
         let new_len = (self.slice().len() as isize + n) as usize;
+        let old_len = self.slice().len();
         match self {
             Store::Mmap((ref file, ref mut mmap)) => {
-                mmap.flush().unwrap();
+                // don't flush if file is empty (mac os bug)
+                if old_len > 0 {
+                    mmap.flush().unwrap();
+                }
                 let bytes = new_len * std::mem::size_of::<T>();
                 // unmap so we can resize the file in windows
                 #[cfg(target_os = "windows")]
