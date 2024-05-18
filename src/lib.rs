@@ -411,6 +411,40 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
             .map(|n| (self.get_swid(0, n.id), n.distance))
             .collect()
     }
+    pub fn update(&mut self, q: &[F], swid: Swid) -> () {
+        let id = *self.swid_to_id.get(&swid).unwrap();
+        self.vector_layer.slice_mut()
+            [id * self.dimensions..(id + 1) * self.dimensions]
+            .copy_from_slice(q);
+        self.length_2_layer.slice_mut()[id] = get_length_2(q);
+        for lc in 0..MAX_LAYER {
+            let position = self.layers[lc]
+                .iter()
+                .position(|n| n.lowest_id == id);
+            if position.is_none() {
+                continue;
+            }
+            let position = position.unwrap();
+            // remove from neighbors
+            for node in self.layers[lc].iter_mut() {
+                node.neighbors.retain(|n| n.id != position);
+            }
+            let n = self.search_layer(q, self.length_2_layer.slice()[id], 0, self.ef_construction, lc);
+            for neighbor in &n {
+                self.layers[lc][neighbor.id].neighbors.push(Neighbor {
+                    id: position,
+                    distance: neighbor.distance,
+                });
+                self.layers[lc][neighbor.id].neighbors.sort();
+                self.layers[lc][neighbor.id].neighbors.truncate(if lc == 0 {
+                    self.m * 2
+                } else {
+                    self.m
+                });
+            }
+            self.layers[lc][position].neighbors = n;
+        }
+    }
 }
 
 #[cfg(test)]
