@@ -323,6 +323,9 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
         self.swid_to_id.remove(&swid_to_remove);
     }
     fn search_layer(&self, q: &[F], qq: F, ep: usize, ef: usize, layer: usize) -> Vec<Neighbor<F>> {
+        self.search_layer_filtered(q, qq, ep, ef, layer, None::<fn(Swid,F) -> bool>)
+    }
+    fn search_layer_filtered(&self, q: &[F], qq: F, ep: usize, ef: usize, layer: usize, filter: Option<impl Fn(Swid,F) -> bool>) -> Vec<Neighbor<F>> {
         if self.layers[layer].len() == 0 {
             return Vec::new();
         }
@@ -364,19 +367,25 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
                 } else {
                     e.distance
                 };
+                let n = Neighbor {
+                    id: e.id,
+                    distance: d_e,
+                };
+                let condition = match filter {
+                    Some(ref f) => f(self.swid_layer.slice()[n.id], n.distance),
+                    None => true,
+                };
                 if result.len() < ef {
-                    result.push(Neighbor {
-                        id: e.id,
-                        distance: d_e,
-                    });
-                    max_dist = max_dist.max(d_e);
+                    if condition {
+                        result.push(n);
+                        max_dist = max_dist.max(d_e);
+                    }
                 } else if d_e < max_dist {
                     pop_max(&mut result);
-                    result.push(Neighbor {
-                        id: e.id,
-                        distance: d_e,
-                    });
-                    max_dist = result.iter().max().unwrap().distance;
+                    if condition {
+                        result.push(n);
+                        max_dist = result.iter().max().unwrap().distance;
+                    }
                 }
             }
         }
@@ -406,6 +415,22 @@ impl<F: Float + Debug + Default + Sum> Index<F> {
             };
         }
         self.search_layer(q, qq, ep, ef_search, 0)
+            .iter()
+            .take(k)
+            .map(|n| (self.get_swid(0, n.id), n.distance))
+            .collect()
+    }
+    pub fn knn_filtered(&self, q: &[F], k: usize, filter: impl Fn(Swid,F) -> bool) -> Vec<(Swid, F)> {
+        let qq = get_length_2(q);
+        let ef_search = k;
+        let mut ep = 0;
+        for lc in (1..MAX_LAYER).rev() {
+            ep = match self.search_layer(q, qq, ep, 1, lc).first() {
+                Some(n) => self.layers[lc][n.id].lower_id,
+                None => 0,
+            };
+        }
+        self.search_layer_filtered(q, qq, ep, ef_search, 0, Some(filter))
             .iter()
             .take(k)
             .map(|n| (self.get_swid(0, n.id), n.distance))
